@@ -1,0 +1,26 @@
+{
+  "name": "meteor-client-side",
+  "version": "0.1.0",
+  "homepage": "https://github.com/idanwe/meteor-client-side",
+  "authors": [
+    "Idan Wender <idanwe2@gmail.com>"
+  ],
+  "description": "Use Meteor's client side DDP protocol and Minimongo in a non Meteor project",
+  "main": "meteor-client-side.min.js",
+  "keywords": [
+    "meteor",
+    "ddp",
+    "minimongo",
+    "mongo",
+    "client",
+    "side"
+  ],
+  "license": "MIT",
+  "ignore": [
+    "**/.*",
+    "node_modules",
+    "bower_components",
+    "test",
+    "tests"
+  ]
+}

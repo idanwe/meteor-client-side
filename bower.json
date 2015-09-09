@@ -6,7 +6,7 @@
     "Idan Wender <idanwe2@gmail.com>"
   ],
   "description": "Use Meteor's client side DDP protocol and Minimongo in a non Meteor project",
-  "main": "meteor-client-side.min.js",
+  "main": "dist/meteor-client-side.bundle.min.js",
   "keywords": [
     "meteor",
     "ddp",

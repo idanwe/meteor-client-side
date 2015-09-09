@@ -5929,7 +5929,7 @@ module = {exports:{}};                                                          
   }                                                                                                        // 63
                                                                                                            // 64
   gju.pointInBoundingBox = function (point, bounds) {                                                      // 65
-    return !(point.coordinates[1] < bounds[0][0] || point.coordinates[1] > bounds[1][0] || point.coordinates[0] < bounds[0][1] || point.coordinates[0] > bounds[1][1]) 
+    return !(point.coordinates[1] < bounds[0][0] || point.coordinates[1] > bounds[1][0] || point.coordinates[0] < bounds[0][1] || point.coordinates[0] > bounds[1][1])
   }                                                                                                        // 67
                                                                                                            // 68
   // Point in Polygon                                                                                      // 69
@@ -17134,25 +17134,12 @@ Package.mongo = {
 /* Imports for global scope */
 
 Meteor = Package.meteor.Meteor;
-WebApp = Package.webapp.WebApp;
 Log = Package.logging.Log;
-Tracker = Package.deps.Tracker;
-Deps = Package.deps.Deps;
-Session = Package.session.Session;
-DDP = Package.livedata.DDP;
+Tracker = Package.tracker.Tracker;
+DDP = Package.ddp.DDP;
 Mongo = Package.mongo.Mongo;
-Blaze = Package.ui.Blaze;
-UI = Package.ui.UI;
-Handlebars = Package.ui.Handlebars;
-Spacebars = Package.spacebars.Spacebars;
-Template = Package.templating.Template;
 check = Package.check.check;
 Match = Package.check.Match;
 _ = Package.underscore._;
-$ = Package.jquery.$;
-jQuery = Package.jquery.jQuery;
 Random = Package.random.Random;
 EJSON = Package.ejson.EJSON;
-LaunchScreen = Package['launch-screen'].LaunchScreen;
-HTML = Package.htmljs.HTML;
-

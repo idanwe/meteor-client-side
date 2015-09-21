@@ -52,7 +52,7 @@ cat "$PACKAGES_PATH/global-imports.js" >> $OUTPUT_PATH/$NAME.bundle.js
 
 # Minify
 npm install uglify-js
-$PROJECT_ROOT/node_modules/.bin/uglifyjs $OUTPUT_PATH/$NAME.bundle.js -o $OUTPUT_PATH/$NAME.bundle.min.js
+./node_modules/.bin/uglifyjs $OUTPUT_PATH/$NAME.bundle.js -o $OUTPUT_PATH/$NAME.bundle.min.js
 
 # Copy the bundled files to the dist folder
 cp $OUTPUT_PATH/$NAME.bundle.* $DIST_PATH

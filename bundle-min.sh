@@ -18,6 +18,10 @@ mkdir -p $DIST_PATH
 # Create temp meteor project
 rm -rf $BUNDLER_PATH
 meteor create $BUNDLER_PATH
+
+# Move packages to meteor folder
+cp src/packages $BUNDLER_PATH/.meteor/
+
 cd $BUNDLER_PATH
 
 # Build the packages
@@ -34,8 +38,11 @@ mkdir $OUTPUT_PATH
 # Concat files
 cat "$PACKAGES_PATH/underscore.js" >> $OUTPUT_PATH/$NAME.bundle.js
 cat "$PACKAGES_PATH/meteor.js" >> $OUTPUT_PATH/$NAME.bundle.js
+cat "$PACKAGES_PATH/babel-runtime.js" >> $OUTPUT_PATH/$NAME.bundle.js
+cat "$PACKAGES_PATH/ecmascript-runtime.js" >> $OUTPUT_PATH/$NAME.bundle.js
+cat "$PACKAGES_PATH/ecmascript.js" >> $OUTPUT_PATH/$NAME.bundle.js
+cat "$PACKAGES_PATH/promise.js" >> $OUTPUT_PATH/$NAME.bundle.js
 cat "$PACKAGES_PATH/base64.js" >> $OUTPUT_PATH/$NAME.bundle.js
-cat "$PACKAGES_PATH/json.js" >> $OUTPUT_PATH/$NAME.bundle.js
 cat "$PACKAGES_PATH/ejson.js" >> $OUTPUT_PATH/$NAME.bundle.js
 cat "$PACKAGES_PATH/check.js" >> $OUTPUT_PATH/$NAME.bundle.js
 cat "$PACKAGES_PATH/random.js" >> $OUTPUT_PATH/$NAME.bundle.js
@@ -44,10 +51,14 @@ cat "$PACKAGES_PATH/retry.js" >> $OUTPUT_PATH/$NAME.bundle.js
 cat "$PACKAGES_PATH/id-map.js" >> $OUTPUT_PATH/$NAME.bundle.js
 cat "$PACKAGES_PATH/ordered-dict.js" >> $OUTPUT_PATH/$NAME.bundle.js
 cat "$PACKAGES_PATH/geojson-utils.js" >> $OUTPUT_PATH/$NAME.bundle.js
+cat "$PACKAGES_PATH/diff-sequence.js" >> $OUTPUT_PATH/$NAME.bundle.js
+cat "$PACKAGES_PATH/mongo-id.js" >> $OUTPUT_PATH/$NAME.bundle.js
 cat "$PACKAGES_PATH/minimongo.js" >> $OUTPUT_PATH/$NAME.bundle.js
-cat "$PACKAGES_PATH/logging.js" >> $OUTPUT_PATH/$NAME.bundle.js
+cat "$PACKAGES_PATH/ddp-common.js" >> $OUTPUT_PATH/$NAME.bundle.js
+cat "$PACKAGES_PATH/ddp-client.js" >> $OUTPUT_PATH/$NAME.bundle.js
 cat "$PACKAGES_PATH/ddp.js" >> $OUTPUT_PATH/$NAME.bundle.js
 cat "$PACKAGES_PATH/mongo.js" >> $OUTPUT_PATH/$NAME.bundle.js
+cat "$PACKAGES_PATH/webapp.js" >> $OUTPUT_PATH/$NAME.bundle.js
 cat "$PACKAGES_PATH/global-imports.js" >> $OUTPUT_PATH/$NAME.bundle.js
 
 # Minify

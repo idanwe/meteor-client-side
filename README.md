@@ -27,7 +27,7 @@ Use Meteor's client side DDP protocol and Minimongo in a non Meteor project.
 - [ionic-chat](https://github.com/idanwe/meetup-NY-meteor-ionic-chat)
 - [angular-socially](https://github.com/idanwe/angular-socially-client-side)
 
-### Pacakges:
+### Packages:
 
 - [accounts-password](https://github.com/idanwe/accounts-password-client-side)
 - [accounts-phone](https://github.com/okland/accounts-phone)

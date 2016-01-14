@@ -1,3 +1,5 @@
+This is a fork of https://github.com/idanwe/meteor-client-side.git to make it available on npm
+
 # meteor-client-side
 
 Use Meteor's client side DDP protocol and Minimongo in a non Meteor project.

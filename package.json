@@ -2,7 +2,7 @@
   "name": "meteor-client-side",
   "version": "0.2.3",
   "description": "User Meteor's client side DDP protocol and Minimongo in a non-Meteor project",
-  "main": "dist/meteor-client-side-bundle.min.js",
+  "main": "dist/meteor-client-side.bundle.min.js",
   "scripts": {
     "test": "echo \"Error: no test specified\" && exit 1"
   },

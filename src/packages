@@ -2,6 +2,5 @@ meteor
 webapp
 underscore
 ddp
-livedata
 mongo
 tracker

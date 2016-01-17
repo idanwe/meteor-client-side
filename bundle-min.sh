@@ -58,7 +58,6 @@ cat "$PACKAGES_PATH/ddp-common.js" >> $OUTPUT_PATH/$NAME.bundle.js
 cat "$PACKAGES_PATH/ddp-client.js" >> $OUTPUT_PATH/$NAME.bundle.js
 cat "$PACKAGES_PATH/ddp.js" >> $OUTPUT_PATH/$NAME.bundle.js
 cat "$PACKAGES_PATH/mongo.js" >> $OUTPUT_PATH/$NAME.bundle.js
-cat "$PACKAGES_PATH/webapp.js" >> $OUTPUT_PATH/$NAME.bundle.js
 cat "$PACKAGES_PATH/global-imports.js" >> $OUTPUT_PATH/$NAME.bundle.js
 
 # Minify

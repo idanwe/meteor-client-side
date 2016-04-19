@@ -12,6 +12,8 @@
 
 /* Imports */
 var Meteor = Package.meteor.Meteor;
+var global = Package.meteor.global;
+var meteorEnv = Package.meteor.meteorEnv;
 var Tracker = Package.tracker.Tracker;
 var Deps = Package.tracker.Deps;
 var Retry = Package.retry.Retry;
@@ -194,9 +196,12 @@ Autoupdate._retrySubscription();                                                
 
 /* Exports */
 if (typeof Package === 'undefined') Package = {};
-Package.autoupdate = {
+(function (pkg, symbols) {
+  for (var s in symbols)
+    (s in pkg) || (pkg[s] = symbols[s]);
+})(Package.autoupdate = {}, {
   Autoupdate: Autoupdate
-};
+});
 
 })();
 //////////////////////////////////////////////////////////////////////////
@@ -213,6 +218,8 @@ Package.autoupdate = {
 
 /* Imports */
 var Meteor = Package.meteor.Meteor;
+var global = Package.meteor.global;
+var meteorEnv = Package.meteor.meteorEnv;
 var _ = Package.underscore._;
 
 /* Package-scope variables */
@@ -446,14 +453,22 @@ Reload._reload = function (options) {                                           
                                                                                            // 218
   var tryReload = function () { _.defer(function () {                                      // 219
     if (Reload._migrate(tryReload, options)) {                                             // 220
-      // Tell the browser to shut down this VM and make a new one                          // 221
-      window.location.reload();                                                            // 222
-    }                                                                                      // 223
-  }); };                                                                                   // 224
-                                                                                           // 225
-  tryReload();                                                                             // 226
-};                                                                                         // 227
-                                                                                           // 228
+      // We'd like to make the browser reload the page using location.replace()            // 221
+      // instead of location.reload(), because this avoids validating assets               // 222
+      // with the server if we still have a valid cached copy. This doesn't work           // 223
+      // when the location contains a hash however, because that wouldn't reload           // 224
+      // the page and just scroll to the hash location instead.                            // 225
+      if (window.location.hash) {                                                          // 226
+        window.location.reload();                                                          // 227
+      } else {                                                                             // 228
+        window.location.replace(window.location.href);                                     // 229
+      }                                                                                    // 230
+    }                                                                                      // 231
+  }); };                                                                                   // 232
+                                                                                           // 233
+  tryReload();                                                                             // 234
+};                                                                                         // 235
+                                                                                           // 236
 /////////////////////////////////////////////////////////////////////////////////////////////
 
 }).call(this);
@@ -487,25 +502,20 @@ Meteor._reload = {                                                              
 
 /* Exports */
 if (typeof Package === 'undefined') Package = {};
-Package.reload = {
+(function (pkg, symbols) {
+  for (var s in symbols)
+    (s in pkg) || (pkg[s] = symbols[s]);
+})(Package.reload = {}, {
   Reload: Reload
-};
+});
 
 })();
-//////////////////////////////////////////////////////////////////////////
-//                                                                      //
-// This is a generated file. You can view the original                  //
-// source in your browser if your browser supports source maps.         //
-// Source maps are supported by all recent versions of Chrome, Safari,  //
-// and Firefox, and by Internet Explorer 11.                            //
-//                                                                      //
-//////////////////////////////////////////////////////////////////////////
-
-
 (function () {
 
 /* Imports */
 var Meteor = Package.meteor.Meteor;
+var global = Package.meteor.global;
+var meteorEnv = Package.meteor.meteorEnv;
 
 
 

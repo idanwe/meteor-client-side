@@ -1,5 +1,5 @@
 {
-  "name": "meteor-client-side",
+  "name": "meteor-client-side-official",
   "version": "1.3.1",
   "description": "Use Meteor's client side DDP protocol and Minimongo in a non Meteor project",
   "main": "dist/meteor-client-side.bundle.min.js",

@@ -1,16 +1,3 @@
-This is a fork of https://github.com/idanwe/meteor-client-side.git to make it available on npm
-
-To use, add
-```
-__meteor_runtime_config__ = {};
-__meteor_runtime_config__.DDP_DEFAULT_CONNECTION_URL = 'http://localhost:3000';
-```
-and then 
-```
-require('meteor-client-side')
-```
-
-
 # meteor-client-side
 
 Use Meteor's client side DDP protocol and Minimongo in a non Meteor project.

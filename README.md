@@ -5,8 +5,11 @@ Use Meteor's client side DDP protocol and Minimongo in a non Meteor project.
 
 ### Installation
 
+#### Bower
 `bower install meteor-client-side`
 
+#### NPM
+`npm install meteor-client-side`
 
 ### Usage
 
@@ -43,4 +46,3 @@ I ran `meteor build --directory` and got the minified version `meteor-client-sid
 In addition, I wanted to use Meteor Accounts packages so I extracted it too [accounts-password-client-side][accounts-password-client-side]
 
 [accounts-password-client-side]: https://github.com/idanwe/accounts-password-client-side
-

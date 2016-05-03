@@ -9,7 +9,7 @@ Use Meteor's client side DDP protocol and Minimongo in a non Meteor project.
 `bower install meteor-client-side`
 
 * NPM
-`npm install meteor-client-side-official`
+`npm install meteor-client-side`
 
 
 ### Usage

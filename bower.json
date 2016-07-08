@@ -1,15 +1,12 @@
 {
   "name": "meteor-client-side",
-  "version": "1.3.1",
+  "version": "1.3.4",
   "homepage": "https://github.com/idanwe/meteor-client-side",
   "authors": [
     "Idan Wender <idanwe2@gmail.com>"
   ],
   "description": "Use Meteor's client side DDP protocol and Minimongo in a non Meteor project",
-  "main": [
-    "./meteor-runtime-config.js",
-    "./dist/meteor-client-side.bundle.min.js"
-  ],
+  "main": "./dist/meteor-client-side.bundle.min.js",
   "keywords": [
     "meteor",
     "ddp",

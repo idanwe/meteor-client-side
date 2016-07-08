@@ -221,6 +221,9 @@ var Meteor = Package.meteor.Meteor;
 var global = Package.meteor.global;
 var meteorEnv = Package.meteor.meteorEnv;
 var _ = Package.underscore._;
+var Symbol = Package['ecmascript-runtime'].Symbol;
+var Map = Package['ecmascript-runtime'].Map;
+var Set = Package['ecmascript-runtime'].Set;
 
 /* Package-scope variables */
 var Reload;
@@ -458,7 +461,7 @@ Reload._reload = function (options) {                                           
       // with the server if we still have a valid cached copy. This doesn't work           // 223
       // when the location contains a hash however, because that wouldn't reload           // 224
       // the page and just scroll to the hash location instead.                            // 225
-      if (window.location.hash) {                                                          // 226
+      if (window.location.hash || window.location.href.endsWith("#")) {                    // 226
         window.location.reload();                                                          // 227
       } else {                                                                             // 228
         window.location.replace(window.location.href);                                     // 229

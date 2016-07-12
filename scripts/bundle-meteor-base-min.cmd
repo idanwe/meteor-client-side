@@ -1,0 +1,36 @@
+:: Set the bundle file package
+set PACKAGE=meteor
+
+call "%SCRIPTS_PATH%\common\init-bundle.cmd"
+
+:: Concat files
+type "%PACKAGES_PATH%\underscore.js" >> "%BUNDLE_FILE%.js"
+type "%PROJECT_ROOT%\meteor-runtime-config.js" >> "%BUNDLE_FILE%.js"
+type "%PACKAGES_PATH%\meteor.js" >> "%BUNDLE_FILE%.js"
+type "%PACKAGES_PATH%\modules-runtime.js" >> "%BUNDLE_FILE%.js"
+type "%PACKAGES_PATH%\modules.js" >> "%BUNDLE_FILE%.js"
+type "%PACKAGES_PATH%\promise.js" >> "%BUNDLE_FILE%.js"
+type "%PACKAGES_PATH%\babel-runtime.js" >> "%BUNDLE_FILE%.js"
+type "%PACKAGES_PATH%\ecmascript-runtime.js" >> "%BUNDLE_FILE%.js"
+type "%PACKAGES_PATH%\ecmascript.js" >> "%BUNDLE_FILE%.js"
+type "%PACKAGES_PATH%\base64.js" >> "%BUNDLE_FILE%.js"
+type "%PACKAGES_PATH%\ejson.js" >> "%BUNDLE_FILE%.js"
+type "%PACKAGES_PATH%\jquery.js" >> "%BUNDLE_FILE%.js"
+type "%PACKAGES_PATH%\check.js" >> "%BUNDLE_FILE%.js"
+type "%PACKAGES_PATH%\random.js" >> "%BUNDLE_FILE%.js"
+type "%PACKAGES_PATH%\tracker.js" >> "%BUNDLE_FILE%.js"
+type "%PACKAGES_PATH%\retry.js" >> "%BUNDLE_FILE%.js"
+type "%PACKAGES_PATH%\id-map.js" >> "%BUNDLE_FILE%.js"
+type "%PACKAGES_PATH%\ordered-dict.js" >> "%BUNDLE_FILE%.js"
+type "%PACKAGES_PATH%\geojson-utils.js" >> "%BUNDLE_FILE%.js"
+type "%PACKAGES_PATH%\diff-sequence.js" >> "%BUNDLE_FILE%.js"
+type "%PACKAGES_PATH%\mongo-id.js" >> "%BUNDLE_FILE%.js"
+type "%PACKAGES_PATH%\minimongo.js" >> "%BUNDLE_FILE%.js"
+type "%PACKAGES_PATH%\ddp-common.js" >> "%BUNDLE_FILE%.js"
+type "%PACKAGES_PATH%\ddp-client.js" >> "%BUNDLE_FILE%.js"
+type "%PACKAGES_PATH%\ddp.js" >> "%BUNDLE_FILE%.js"
+type "%PACKAGES_PATH%\allow-deny.js" >> "%BUNDLE_FILE%.js"
+type "%PACKAGES_PATH%\mongo.js" >> "%BUNDLE_FILE%.js"
+type "%PACKAGES_PATH%\global-imports.js" >> "%BUNDLE_FILE%.js"
+
+call "%SCRIPTS_PATH%\common\end-bundle.cmd"

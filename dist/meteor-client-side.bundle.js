@@ -3258,7 +3258,12 @@ install("minimongo");                                                        // 
 install("ddp-server");                                                       // 56
 install("allow-deny");                                                       // 57
 install("mongo");                                                            // 58
-                                                                             // 59
+install("ddp-rate-limiter");                                                 // 59
+install("localstorage");                                                     // 60
+install("callback-hook");                                                    // 61
+install("accounts-base", "meteor/accounts-base/client_main.js");             // 62
+install("service-configuration");                                            // 63
+                                                                             // 64
 ///////////////////////////////////////////////////////////////////////////////
 
 },"process.js":["process",function(require,exports,module){
@@ -10359,624 +10364,612 @@ Tracker.active = false;                                                         
  */                                                                                                                   // 26
 Tracker.currentComputation = null;                                                                                    // 27
                                                                                                                       // 28
-// References to all computations created within the Tracker by id.                                                   // 29
-// Keeping these references on an underscore property gives more control to                                           // 30
-// tooling and packages extending Tracker without increasing the API surface.                                         // 31
-// These can used to monkey-patch computations, their functions, use                                                  // 32
-// computation ids for tracking, etc.                                                                                 // 33
-Tracker._computations = {};                                                                                           // 34
-                                                                                                                      // 35
-var setCurrentComputation = function (c) {                                                                            // 36
-  Tracker.currentComputation = c;                                                                                     // 37
-  Tracker.active = !! c;                                                                                              // 38
-};                                                                                                                    // 39
-                                                                                                                      // 40
-var _debugFunc = function () {                                                                                        // 41
-  // We want this code to work without Meteor, and also without                                                       // 42
-  // "console" (which is technically non-standard and may be missing                                                  // 43
-  // on some browser we come across, like it was on IE 7).                                                            // 44
-  //                                                                                                                  // 45
-  // Lazy evaluation because `Meteor` does not exist right away.(??)                                                  // 46
-  return (typeof Meteor !== "undefined" ? Meteor._debug :                                                             // 47
-          ((typeof console !== "undefined") && console.error ?                                                        // 48
-           function () { console.error.apply(console, arguments); } :                                                 // 49
-           function () {}));                                                                                          // 50
-};                                                                                                                    // 51
-                                                                                                                      // 52
-var _maybeSuppressMoreLogs = function (messagesLength) {                                                              // 53
-  // Sometimes when running tests, we intentionally suppress logs on expected                                         // 54
-  // printed errors. Since the current implementation of _throwOrLog can log                                          // 55
-  // multiple separate log messages, suppress all of them if at least one suppress                                    // 56
-  // is expected as we still want them to count as one.                                                               // 57
-  if (typeof Meteor !== "undefined") {                                                                                // 58
-    if (Meteor._suppressed_log_expected()) {                                                                          // 59
-      Meteor._suppress_log(messagesLength - 1);                                                                       // 60
-    }                                                                                                                 // 61
-  }                                                                                                                   // 62
-};                                                                                                                    // 63
-                                                                                                                      // 64
-var _throwOrLog = function (from, e) {                                                                                // 65
-  if (throwFirstError) {                                                                                              // 66
-    throw e;                                                                                                          // 67
-  } else {                                                                                                            // 68
-    var printArgs = ["Exception from Tracker " + from + " function:"];                                                // 69
-    if (e.stack && e.message && e.name) {                                                                             // 70
-      var idx = e.stack.indexOf(e.message);                                                                           // 71
-      if (idx < 0 || idx > e.name.length + 2) { // check for "Error: "                                                // 72
-        // message is not part of the stack                                                                           // 73
-        var message = e.name + ": " + e.message;                                                                      // 74
-        printArgs.push(message);                                                                                      // 75
-      }                                                                                                               // 76
-    }                                                                                                                 // 77
-    printArgs.push(e.stack);                                                                                          // 78
-    _maybeSuppressMoreLogs(printArgs.length);                                                                         // 79
-                                                                                                                      // 80
-    for (var i = 0; i < printArgs.length; i++) {                                                                      // 81
-      _debugFunc()(printArgs[i]);                                                                                     // 82
-    }                                                                                                                 // 83
-  }                                                                                                                   // 84
-};                                                                                                                    // 85
-                                                                                                                      // 86
-// Takes a function `f`, and wraps it in a `Meteor._noYieldsAllowed`                                                  // 87
-// block if we are running on the server. On the client, returns the                                                  // 88
-// original function (since `Meteor._noYieldsAllowed` is a                                                            // 89
-// no-op). This has the benefit of not adding an unnecessary stack                                                    // 90
-// frame on the client.                                                                                               // 91
-var withNoYieldsAllowed = function (f) {                                                                              // 92
-  if ((typeof Meteor === 'undefined') || Meteor.isClient) {                                                           // 93
-    return f;                                                                                                         // 94
-  } else {                                                                                                            // 95
-    return function () {                                                                                              // 96
-      var args = arguments;                                                                                           // 97
-      Meteor._noYieldsAllowed(function () {                                                                           // 98
-        f.apply(null, args);                                                                                          // 99
-      });                                                                                                             // 100
-    };                                                                                                                // 101
-  }                                                                                                                   // 102
-};                                                                                                                    // 103
-                                                                                                                      // 104
-var nextId = 1;                                                                                                       // 105
-// computations whose callbacks we should call at flush time                                                          // 106
-var pendingComputations = [];                                                                                         // 107
-// `true` if a Tracker.flush is scheduled, or if we are in Tracker.flush now                                          // 108
-var willFlush = false;                                                                                                // 109
-// `true` if we are in Tracker.flush now                                                                              // 110
-var inFlush = false;                                                                                                  // 111
-// `true` if we are computing a computation now, either first time                                                    // 112
-// or recompute.  This matches Tracker.active unless we are inside                                                    // 113
-// Tracker.nonreactive, which nullfies currentComputation even though                                                 // 114
-// an enclosing computation may still be running.                                                                     // 115
-var inCompute = false;                                                                                                // 116
-// `true` if the `_throwFirstError` option was passed in to the call                                                  // 117
-// to Tracker.flush that we are in. When set, throw rather than log the                                               // 118
-// first error encountered while flushing. Before throwing the error,                                                 // 119
-// finish flushing (from a finally block), logging any subsequent                                                     // 120
-// errors.                                                                                                            // 121
-var throwFirstError = false;                                                                                          // 122
-                                                                                                                      // 123
-var afterFlushCallbacks = [];                                                                                         // 124
-                                                                                                                      // 125
-var requireFlush = function () {                                                                                      // 126
-  if (! willFlush) {                                                                                                  // 127
-    // We want this code to work without Meteor, see debugFunc above                                                  // 128
-    if (typeof Meteor !== "undefined")                                                                                // 129
-      Meteor._setImmediate(Tracker._runFlush);                                                                        // 130
-    else                                                                                                              // 131
-      setTimeout(Tracker._runFlush, 0);                                                                               // 132
-    willFlush = true;                                                                                                 // 133
-  }                                                                                                                   // 134
-};                                                                                                                    // 135
+var setCurrentComputation = function (c) {                                                                            // 29
+  Tracker.currentComputation = c;                                                                                     // 30
+  Tracker.active = !! c;                                                                                              // 31
+};                                                                                                                    // 32
+                                                                                                                      // 33
+var _debugFunc = function () {                                                                                        // 34
+  // We want this code to work without Meteor, and also without                                                       // 35
+  // "console" (which is technically non-standard and may be missing                                                  // 36
+  // on some browser we come across, like it was on IE 7).                                                            // 37
+  //                                                                                                                  // 38
+  // Lazy evaluation because `Meteor` does not exist right away.(??)                                                  // 39
+  return (typeof Meteor !== "undefined" ? Meteor._debug :                                                             // 40
+          ((typeof console !== "undefined") && console.error ?                                                        // 41
+           function () { console.error.apply(console, arguments); } :                                                 // 42
+           function () {}));                                                                                          // 43
+};                                                                                                                    // 44
+                                                                                                                      // 45
+var _maybeSuppressMoreLogs = function (messagesLength) {                                                              // 46
+  // Sometimes when running tests, we intentionally suppress logs on expected                                         // 47
+  // printed errors. Since the current implementation of _throwOrLog can log                                          // 48
+  // multiple separate log messages, suppress all of them if at least one suppress                                    // 49
+  // is expected as we still want them to count as one.                                                               // 50
+  if (typeof Meteor !== "undefined") {                                                                                // 51
+    if (Meteor._suppressed_log_expected()) {                                                                          // 52
+      Meteor._suppress_log(messagesLength - 1);                                                                       // 53
+    }                                                                                                                 // 54
+  }                                                                                                                   // 55
+};                                                                                                                    // 56
+                                                                                                                      // 57
+var _throwOrLog = function (from, e) {                                                                                // 58
+  if (throwFirstError) {                                                                                              // 59
+    throw e;                                                                                                          // 60
+  } else {                                                                                                            // 61
+    var printArgs = ["Exception from Tracker " + from + " function:"];                                                // 62
+    if (e.stack && e.message && e.name) {                                                                             // 63
+      var idx = e.stack.indexOf(e.message);                                                                           // 64
+      if (idx < 0 || idx > e.name.length + 2) { // check for "Error: "                                                // 65
+        // message is not part of the stack                                                                           // 66
+        var message = e.name + ": " + e.message;                                                                      // 67
+        printArgs.push(message);                                                                                      // 68
+      }                                                                                                               // 69
+    }                                                                                                                 // 70
+    printArgs.push(e.stack);                                                                                          // 71
+    _maybeSuppressMoreLogs(printArgs.length);                                                                         // 72
+                                                                                                                      // 73
+    for (var i = 0; i < printArgs.length; i++) {                                                                      // 74
+      _debugFunc()(printArgs[i]);                                                                                     // 75
+    }                                                                                                                 // 76
+  }                                                                                                                   // 77
+};                                                                                                                    // 78
+                                                                                                                      // 79
+// Takes a function `f`, and wraps it in a `Meteor._noYieldsAllowed`                                                  // 80
+// block if we are running on the server. On the client, returns the                                                  // 81
+// original function (since `Meteor._noYieldsAllowed` is a                                                            // 82
+// no-op). This has the benefit of not adding an unnecessary stack                                                    // 83
+// frame on the client.                                                                                               // 84
+var withNoYieldsAllowed = function (f) {                                                                              // 85
+  if ((typeof Meteor === 'undefined') || Meteor.isClient) {                                                           // 86
+    return f;                                                                                                         // 87
+  } else {                                                                                                            // 88
+    return function () {                                                                                              // 89
+      var args = arguments;                                                                                           // 90
+      Meteor._noYieldsAllowed(function () {                                                                           // 91
+        f.apply(null, args);                                                                                          // 92
+      });                                                                                                             // 93
+    };                                                                                                                // 94
+  }                                                                                                                   // 95
+};                                                                                                                    // 96
+                                                                                                                      // 97
+var nextId = 1;                                                                                                       // 98
+// computations whose callbacks we should call at flush time                                                          // 99
+var pendingComputations = [];                                                                                         // 100
+// `true` if a Tracker.flush is scheduled, or if we are in Tracker.flush now                                          // 101
+var willFlush = false;                                                                                                // 102
+// `true` if we are in Tracker.flush now                                                                              // 103
+var inFlush = false;                                                                                                  // 104
+// `true` if we are computing a computation now, either first time                                                    // 105
+// or recompute.  This matches Tracker.active unless we are inside                                                    // 106
+// Tracker.nonreactive, which nullfies currentComputation even though                                                 // 107
+// an enclosing computation may still be running.                                                                     // 108
+var inCompute = false;                                                                                                // 109
+// `true` if the `_throwFirstError` option was passed in to the call                                                  // 110
+// to Tracker.flush that we are in. When set, throw rather than log the                                               // 111
+// first error encountered while flushing. Before throwing the error,                                                 // 112
+// finish flushing (from a finally block), logging any subsequent                                                     // 113
+// errors.                                                                                                            // 114
+var throwFirstError = false;                                                                                          // 115
+                                                                                                                      // 116
+var afterFlushCallbacks = [];                                                                                         // 117
+                                                                                                                      // 118
+var requireFlush = function () {                                                                                      // 119
+  if (! willFlush) {                                                                                                  // 120
+    // We want this code to work without Meteor, see debugFunc above                                                  // 121
+    if (typeof Meteor !== "undefined")                                                                                // 122
+      Meteor._setImmediate(Tracker._runFlush);                                                                        // 123
+    else                                                                                                              // 124
+      setTimeout(Tracker._runFlush, 0);                                                                               // 125
+    willFlush = true;                                                                                                 // 126
+  }                                                                                                                   // 127
+};                                                                                                                    // 128
+                                                                                                                      // 129
+// Tracker.Computation constructor is visible but private                                                             // 130
+// (throws an error if you try to call it)                                                                            // 131
+var constructingComputation = false;                                                                                  // 132
+                                                                                                                      // 133
+//                                                                                                                    // 134
+// http://docs.meteor.com/#tracker_computation                                                                        // 135
                                                                                                                       // 136
-// Tracker.Computation constructor is visible but private                                                             // 137
-// (throws an error if you try to call it)                                                                            // 138
-var constructingComputation = false;                                                                                  // 139
-                                                                                                                      // 140
-//                                                                                                                    // 141
-// http://docs.meteor.com/#tracker_computation                                                                        // 142
-                                                                                                                      // 143
-/**                                                                                                                   // 144
- * @summary A Computation object represents code that is repeatedly rerun                                             // 145
- * in response to                                                                                                     // 146
- * reactive data changes. Computations don't have return values; they just                                            // 147
- * perform actions, such as rerendering a template on the screen. Computations                                        // 148
- * are created using Tracker.autorun. Use stop to prevent further rerunning of a                                      // 149
- * computation.                                                                                                       // 150
- * @instancename computation                                                                                          // 151
- */                                                                                                                   // 152
-Tracker.Computation = function (f, parent, onError) {                                                                 // 153
-  if (! constructingComputation)                                                                                      // 154
-    throw new Error(                                                                                                  // 155
-      "Tracker.Computation constructor is private; use Tracker.autorun");                                             // 156
-  constructingComputation = false;                                                                                    // 157
-                                                                                                                      // 158
-  var self = this;                                                                                                    // 159
-                                                                                                                      // 160
-  // http://docs.meteor.com/#computation_stopped                                                                      // 161
-                                                                                                                      // 162
-  /**                                                                                                                 // 163
-   * @summary True if this computation has been stopped.                                                              // 164
-   * @locus Client                                                                                                    // 165
-   * @memberOf Tracker.Computation                                                                                    // 166
-   * @instance                                                                                                        // 167
-   * @name  stopped                                                                                                   // 168
-   */                                                                                                                 // 169
-  self.stopped = false;                                                                                               // 170
-                                                                                                                      // 171
-  // http://docs.meteor.com/#computation_invalidated                                                                  // 172
-                                                                                                                      // 173
-  /**                                                                                                                 // 174
-   * @summary True if this computation has been invalidated (and not yet rerun), or if it has been stopped.           // 175
-   * @locus Client                                                                                                    // 176
-   * @memberOf Tracker.Computation                                                                                    // 177
-   * @instance                                                                                                        // 178
-   * @name  invalidated                                                                                               // 179
-   * @type {Boolean}                                                                                                  // 180
-   */                                                                                                                 // 181
-  self.invalidated = false;                                                                                           // 182
-                                                                                                                      // 183
-  // http://docs.meteor.com/#computation_firstrun                                                                     // 184
-                                                                                                                      // 185
-  /**                                                                                                                 // 186
+/**                                                                                                                   // 137
+ * @summary A Computation object represents code that is repeatedly rerun                                             // 138
+ * in response to                                                                                                     // 139
+ * reactive data changes. Computations don't have return values; they just                                            // 140
+ * perform actions, such as rerendering a template on the screen. Computations                                        // 141
+ * are created using Tracker.autorun. Use stop to prevent further rerunning of a                                      // 142
+ * computation.                                                                                                       // 143
+ * @instancename computation                                                                                          // 144
+ */                                                                                                                   // 145
+Tracker.Computation = function (f, parent, onError) {                                                                 // 146
+  if (! constructingComputation)                                                                                      // 147
+    throw new Error(                                                                                                  // 148
+      "Tracker.Computation constructor is private; use Tracker.autorun");                                             // 149
+  constructingComputation = false;                                                                                    // 150
+                                                                                                                      // 151
+  var self = this;                                                                                                    // 152
+                                                                                                                      // 153
+  // http://docs.meteor.com/#computation_stopped                                                                      // 154
+                                                                                                                      // 155
+  /**                                                                                                                 // 156
+   * @summary True if this computation has been stopped.                                                              // 157
+   * @locus Client                                                                                                    // 158
+   * @memberOf Tracker.Computation                                                                                    // 159
+   * @instance                                                                                                        // 160
+   * @name  stopped                                                                                                   // 161
+   */                                                                                                                 // 162
+  self.stopped = false;                                                                                               // 163
+                                                                                                                      // 164
+  // http://docs.meteor.com/#computation_invalidated                                                                  // 165
+                                                                                                                      // 166
+  /**                                                                                                                 // 167
+   * @summary True if this computation has been invalidated (and not yet rerun), or if it has been stopped.           // 168
+   * @locus Client                                                                                                    // 169
+   * @memberOf Tracker.Computation                                                                                    // 170
+   * @instance                                                                                                        // 171
+   * @name  invalidated                                                                                               // 172
+   * @type {Boolean}                                                                                                  // 173
+   */                                                                                                                 // 174
+  self.invalidated = false;                                                                                           // 175
+                                                                                                                      // 176
+  // http://docs.meteor.com/#computation_firstrun                                                                     // 177
+                                                                                                                      // 178
+  /**                                                                                                                 // 179
    * @summary True during the initial run of the computation at the time `Tracker.autorun` is called, and false on subsequent reruns and at other times.
-   * @locus Client                                                                                                    // 188
-   * @memberOf Tracker.Computation                                                                                    // 189
-   * @instance                                                                                                        // 190
-   * @name  firstRun                                                                                                  // 191
-   * @type {Boolean}                                                                                                  // 192
-   */                                                                                                                 // 193
-  self.firstRun = true;                                                                                               // 194
-                                                                                                                      // 195
-  self._id = nextId++;                                                                                                // 196
-  self._onInvalidateCallbacks = [];                                                                                   // 197
-  self._onStopCallbacks = [];                                                                                         // 198
-  // the plan is at some point to use the parent relation                                                             // 199
-  // to constrain the order that computations are processed                                                           // 200
-  self._parent = parent;                                                                                              // 201
-  self._func = f;                                                                                                     // 202
-  self._onError = onError;                                                                                            // 203
-  self._recomputing = false;                                                                                          // 204
-                                                                                                                      // 205
-  // Register the computation within the global Tracker.                                                              // 206
-  Tracker._computations[self._id] = self;                                                                             // 207
-                                                                                                                      // 208
-  var errored = true;                                                                                                 // 209
-  try {                                                                                                               // 210
-    self._compute();                                                                                                  // 211
-    errored = false;                                                                                                  // 212
-  } finally {                                                                                                         // 213
-    self.firstRun = false;                                                                                            // 214
-    if (errored)                                                                                                      // 215
-      self.stop();                                                                                                    // 216
-  }                                                                                                                   // 217
-};                                                                                                                    // 218
-                                                                                                                      // 219
-// http://docs.meteor.com/#computation_oninvalidate                                                                   // 220
-                                                                                                                      // 221
-/**                                                                                                                   // 222
+   * @locus Client                                                                                                    // 181
+   * @memberOf Tracker.Computation                                                                                    // 182
+   * @instance                                                                                                        // 183
+   * @name  firstRun                                                                                                  // 184
+   * @type {Boolean}                                                                                                  // 185
+   */                                                                                                                 // 186
+  self.firstRun = true;                                                                                               // 187
+                                                                                                                      // 188
+  self._id = nextId++;                                                                                                // 189
+  self._onInvalidateCallbacks = [];                                                                                   // 190
+  self._onStopCallbacks = [];                                                                                         // 191
+  // the plan is at some point to use the parent relation                                                             // 192
+  // to constrain the order that computations are processed                                                           // 193
+  self._parent = parent;                                                                                              // 194
+  self._func = f;                                                                                                     // 195
+  self._onError = onError;                                                                                            // 196
+  self._recomputing = false;                                                                                          // 197
+                                                                                                                      // 198
+  var errored = true;                                                                                                 // 199
+  try {                                                                                                               // 200
+    self._compute();                                                                                                  // 201
+    errored = false;                                                                                                  // 202
+  } finally {                                                                                                         // 203
+    self.firstRun = false;                                                                                            // 204
+    if (errored)                                                                                                      // 205
+      self.stop();                                                                                                    // 206
+  }                                                                                                                   // 207
+};                                                                                                                    // 208
+                                                                                                                      // 209
+// http://docs.meteor.com/#computation_oninvalidate                                                                   // 210
+                                                                                                                      // 211
+/**                                                                                                                   // 212
  * @summary Registers `callback` to run when this computation is next invalidated, or runs it immediately if the computation is already invalidated.  The callback is run exactly once and not upon future invalidations unless `onInvalidate` is called again after the computation becomes valid again.
- * @locus Client                                                                                                      // 224
+ * @locus Client                                                                                                      // 214
  * @param {Function} callback Function to be called on invalidation. Receives one argument, the computation that was invalidated.
- */                                                                                                                   // 226
-Tracker.Computation.prototype.onInvalidate = function (f) {                                                           // 227
-  var self = this;                                                                                                    // 228
-                                                                                                                      // 229
-  if (typeof f !== 'function')                                                                                        // 230
-    throw new Error("onInvalidate requires a function");                                                              // 231
-                                                                                                                      // 232
-  if (self.invalidated) {                                                                                             // 233
-    Tracker.nonreactive(function () {                                                                                 // 234
-      withNoYieldsAllowed(f)(self);                                                                                   // 235
-    });                                                                                                               // 236
-  } else {                                                                                                            // 237
-    self._onInvalidateCallbacks.push(f);                                                                              // 238
-  }                                                                                                                   // 239
-};                                                                                                                    // 240
-                                                                                                                      // 241
-/**                                                                                                                   // 242
+ */                                                                                                                   // 216
+Tracker.Computation.prototype.onInvalidate = function (f) {                                                           // 217
+  var self = this;                                                                                                    // 218
+                                                                                                                      // 219
+  if (typeof f !== 'function')                                                                                        // 220
+    throw new Error("onInvalidate requires a function");                                                              // 221
+                                                                                                                      // 222
+  if (self.invalidated) {                                                                                             // 223
+    Tracker.nonreactive(function () {                                                                                 // 224
+      withNoYieldsAllowed(f)(self);                                                                                   // 225
+    });                                                                                                               // 226
+  } else {                                                                                                            // 227
+    self._onInvalidateCallbacks.push(f);                                                                              // 228
+  }                                                                                                                   // 229
+};                                                                                                                    // 230
+                                                                                                                      // 231
+/**                                                                                                                   // 232
  * @summary Registers `callback` to run when this computation is stopped, or runs it immediately if the computation is already stopped.  The callback is run after any `onInvalidate` callbacks.
- * @locus Client                                                                                                      // 244
+ * @locus Client                                                                                                      // 234
  * @param {Function} callback Function to be called on stop. Receives one argument, the computation that was stopped.
- */                                                                                                                   // 246
-Tracker.Computation.prototype.onStop = function (f) {                                                                 // 247
-  var self = this;                                                                                                    // 248
-                                                                                                                      // 249
-  if (typeof f !== 'function')                                                                                        // 250
-    throw new Error("onStop requires a function");                                                                    // 251
-                                                                                                                      // 252
-  if (self.stopped) {                                                                                                 // 253
-    Tracker.nonreactive(function () {                                                                                 // 254
-      withNoYieldsAllowed(f)(self);                                                                                   // 255
-    });                                                                                                               // 256
-  } else {                                                                                                            // 257
-    self._onStopCallbacks.push(f);                                                                                    // 258
-  }                                                                                                                   // 259
-};                                                                                                                    // 260
-                                                                                                                      // 261
-// http://docs.meteor.com/#computation_invalidate                                                                     // 262
-                                                                                                                      // 263
-/**                                                                                                                   // 264
- * @summary Invalidates this computation so that it will be rerun.                                                    // 265
- * @locus Client                                                                                                      // 266
- */                                                                                                                   // 267
-Tracker.Computation.prototype.invalidate = function () {                                                              // 268
-  var self = this;                                                                                                    // 269
-  if (! self.invalidated) {                                                                                           // 270
-    // if we're currently in _recompute(), don't enqueue                                                              // 271
-    // ourselves, since we'll rerun immediately anyway.                                                               // 272
-    if (! self._recomputing && ! self.stopped) {                                                                      // 273
-      requireFlush();                                                                                                 // 274
-      pendingComputations.push(this);                                                                                 // 275
+ */                                                                                                                   // 236
+Tracker.Computation.prototype.onStop = function (f) {                                                                 // 237
+  var self = this;                                                                                                    // 238
+                                                                                                                      // 239
+  if (typeof f !== 'function')                                                                                        // 240
+    throw new Error("onStop requires a function");                                                                    // 241
+                                                                                                                      // 242
+  if (self.stopped) {                                                                                                 // 243
+    Tracker.nonreactive(function () {                                                                                 // 244
+      withNoYieldsAllowed(f)(self);                                                                                   // 245
+    });                                                                                                               // 246
+  } else {                                                                                                            // 247
+    self._onStopCallbacks.push(f);                                                                                    // 248
+  }                                                                                                                   // 249
+};                                                                                                                    // 250
+                                                                                                                      // 251
+// http://docs.meteor.com/#computation_invalidate                                                                     // 252
+                                                                                                                      // 253
+/**                                                                                                                   // 254
+ * @summary Invalidates this computation so that it will be rerun.                                                    // 255
+ * @locus Client                                                                                                      // 256
+ */                                                                                                                   // 257
+Tracker.Computation.prototype.invalidate = function () {                                                              // 258
+  var self = this;                                                                                                    // 259
+  if (! self.invalidated) {                                                                                           // 260
+    // if we're currently in _recompute(), don't enqueue                                                              // 261
+    // ourselves, since we'll rerun immediately anyway.                                                               // 262
+    if (! self._recomputing && ! self.stopped) {                                                                      // 263
+      requireFlush();                                                                                                 // 264
+      pendingComputations.push(this);                                                                                 // 265
+    }                                                                                                                 // 266
+                                                                                                                      // 267
+    self.invalidated = true;                                                                                          // 268
+                                                                                                                      // 269
+    // callbacks can't add callbacks, because                                                                         // 270
+    // self.invalidated === true.                                                                                     // 271
+    for(var i = 0, f; f = self._onInvalidateCallbacks[i]; i++) {                                                      // 272
+      Tracker.nonreactive(function () {                                                                               // 273
+        withNoYieldsAllowed(f)(self);                                                                                 // 274
+      });                                                                                                             // 275
     }                                                                                                                 // 276
-                                                                                                                      // 277
-    self.invalidated = true;                                                                                          // 278
-                                                                                                                      // 279
-    // callbacks can't add callbacks, because                                                                         // 280
-    // self.invalidated === true.                                                                                     // 281
-    for(var i = 0, f; f = self._onInvalidateCallbacks[i]; i++) {                                                      // 282
-      Tracker.nonreactive(function () {                                                                               // 283
-        withNoYieldsAllowed(f)(self);                                                                                 // 284
-      });                                                                                                             // 285
-    }                                                                                                                 // 286
-    self._onInvalidateCallbacks = [];                                                                                 // 287
-  }                                                                                                                   // 288
-};                                                                                                                    // 289
-                                                                                                                      // 290
-// http://docs.meteor.com/#computation_stop                                                                           // 291
-                                                                                                                      // 292
-/**                                                                                                                   // 293
- * @summary Prevents this computation from rerunning.                                                                 // 294
- * @locus Client                                                                                                      // 295
- */                                                                                                                   // 296
-Tracker.Computation.prototype.stop = function () {                                                                    // 297
-  var self = this;                                                                                                    // 298
-                                                                                                                      // 299
-  if (! self.stopped) {                                                                                               // 300
-    self.stopped = true;                                                                                              // 301
-    self.invalidate();                                                                                                // 302
-    // Unregister from global Tracker.                                                                                // 303
-    delete Tracker._computations[self._id];                                                                           // 304
-    for(var i = 0, f; f = self._onStopCallbacks[i]; i++) {                                                            // 305
-      Tracker.nonreactive(function () {                                                                               // 306
-        withNoYieldsAllowed(f)(self);                                                                                 // 307
-      });                                                                                                             // 308
-    }                                                                                                                 // 309
-    self._onStopCallbacks = [];                                                                                       // 310
-  }                                                                                                                   // 311
-};                                                                                                                    // 312
-                                                                                                                      // 313
-Tracker.Computation.prototype._compute = function () {                                                                // 314
-  var self = this;                                                                                                    // 315
-  self.invalidated = false;                                                                                           // 316
+    self._onInvalidateCallbacks = [];                                                                                 // 277
+  }                                                                                                                   // 278
+};                                                                                                                    // 279
+                                                                                                                      // 280
+// http://docs.meteor.com/#computation_stop                                                                           // 281
+                                                                                                                      // 282
+/**                                                                                                                   // 283
+ * @summary Prevents this computation from rerunning.                                                                 // 284
+ * @locus Client                                                                                                      // 285
+ */                                                                                                                   // 286
+Tracker.Computation.prototype.stop = function () {                                                                    // 287
+  var self = this;                                                                                                    // 288
+                                                                                                                      // 289
+  if (! self.stopped) {                                                                                               // 290
+    self.stopped = true;                                                                                              // 291
+    self.invalidate();                                                                                                // 292
+    for(var i = 0, f; f = self._onStopCallbacks[i]; i++) {                                                            // 293
+      Tracker.nonreactive(function () {                                                                               // 294
+        withNoYieldsAllowed(f)(self);                                                                                 // 295
+      });                                                                                                             // 296
+    }                                                                                                                 // 297
+    self._onStopCallbacks = [];                                                                                       // 298
+  }                                                                                                                   // 299
+};                                                                                                                    // 300
+                                                                                                                      // 301
+Tracker.Computation.prototype._compute = function () {                                                                // 302
+  var self = this;                                                                                                    // 303
+  self.invalidated = false;                                                                                           // 304
+                                                                                                                      // 305
+  var previous = Tracker.currentComputation;                                                                          // 306
+  setCurrentComputation(self);                                                                                        // 307
+  var previousInCompute = inCompute;                                                                                  // 308
+  inCompute = true;                                                                                                   // 309
+  try {                                                                                                               // 310
+    withNoYieldsAllowed(self._func)(self);                                                                            // 311
+  } finally {                                                                                                         // 312
+    setCurrentComputation(previous);                                                                                  // 313
+    inCompute = previousInCompute;                                                                                    // 314
+  }                                                                                                                   // 315
+};                                                                                                                    // 316
                                                                                                                       // 317
-  var previous = Tracker.currentComputation;                                                                          // 318
-  setCurrentComputation(self);                                                                                        // 319
-  var previousInCompute = inCompute;                                                                                  // 320
-  inCompute = true;                                                                                                   // 321
-  try {                                                                                                               // 322
-    withNoYieldsAllowed(self._func)(self);                                                                            // 323
-  } finally {                                                                                                         // 324
-    setCurrentComputation(previous);                                                                                  // 325
-    inCompute = previousInCompute;                                                                                    // 326
-  }                                                                                                                   // 327
-};                                                                                                                    // 328
-                                                                                                                      // 329
-Tracker.Computation.prototype._needsRecompute = function () {                                                         // 330
-  var self = this;                                                                                                    // 331
-  return self.invalidated && ! self.stopped;                                                                          // 332
-};                                                                                                                    // 333
-                                                                                                                      // 334
-Tracker.Computation.prototype._recompute = function () {                                                              // 335
-  var self = this;                                                                                                    // 336
-                                                                                                                      // 337
-  self._recomputing = true;                                                                                           // 338
-  try {                                                                                                               // 339
-    if (self._needsRecompute()) {                                                                                     // 340
-      try {                                                                                                           // 341
-        self._compute();                                                                                              // 342
-      } catch (e) {                                                                                                   // 343
-        if (self._onError) {                                                                                          // 344
-          self._onError(e);                                                                                           // 345
-        } else {                                                                                                      // 346
-          _throwOrLog("recompute", e);                                                                                // 347
-        }                                                                                                             // 348
-      }                                                                                                               // 349
-    }                                                                                                                 // 350
-  } finally {                                                                                                         // 351
-    self._recomputing = false;                                                                                        // 352
-  }                                                                                                                   // 353
-};                                                                                                                    // 354
+Tracker.Computation.prototype._needsRecompute = function () {                                                         // 318
+  var self = this;                                                                                                    // 319
+  return self.invalidated && ! self.stopped;                                                                          // 320
+};                                                                                                                    // 321
+                                                                                                                      // 322
+Tracker.Computation.prototype._recompute = function () {                                                              // 323
+  var self = this;                                                                                                    // 324
+                                                                                                                      // 325
+  self._recomputing = true;                                                                                           // 326
+  try {                                                                                                               // 327
+    if (self._needsRecompute()) {                                                                                     // 328
+      try {                                                                                                           // 329
+        self._compute();                                                                                              // 330
+      } catch (e) {                                                                                                   // 331
+        if (self._onError) {                                                                                          // 332
+          self._onError(e);                                                                                           // 333
+        } else {                                                                                                      // 334
+          _throwOrLog("recompute", e);                                                                                // 335
+        }                                                                                                             // 336
+      }                                                                                                               // 337
+    }                                                                                                                 // 338
+  } finally {                                                                                                         // 339
+    self._recomputing = false;                                                                                        // 340
+  }                                                                                                                   // 341
+};                                                                                                                    // 342
+                                                                                                                      // 343
+/**                                                                                                                   // 344
+ * @summary Process the reactive updates for this computation immediately                                             // 345
+ * and ensure that the computation is rerun. The computation is rerun only                                            // 346
+ * if it is invalidated.                                                                                              // 347
+ * @locus Client                                                                                                      // 348
+ */                                                                                                                   // 349
+Tracker.Computation.prototype.flush = function () {                                                                   // 350
+  var self = this;                                                                                                    // 351
+                                                                                                                      // 352
+  if (self._recomputing)                                                                                              // 353
+    return;                                                                                                           // 354
                                                                                                                       // 355
-/**                                                                                                                   // 356
- * @summary Process the reactive updates for this computation immediately                                             // 357
- * and ensure that the computation is rerun. The computation is rerun only                                            // 358
- * if it is invalidated.                                                                                              // 359
- * @locus Client                                                                                                      // 360
- */                                                                                                                   // 361
-Tracker.Computation.prototype.flush = function () {                                                                   // 362
-  var self = this;                                                                                                    // 363
-                                                                                                                      // 364
-  if (self._recomputing)                                                                                              // 365
-    return;                                                                                                           // 366
-                                                                                                                      // 367
-  self._recompute();                                                                                                  // 368
-};                                                                                                                    // 369
-                                                                                                                      // 370
-/**                                                                                                                   // 371
- * @summary Causes the function inside this computation to run and                                                    // 372
- * synchronously process all reactive updtes.                                                                         // 373
- * @locus Client                                                                                                      // 374
- */                                                                                                                   // 375
-Tracker.Computation.prototype.run = function () {                                                                     // 376
-  var self = this;                                                                                                    // 377
-  self.invalidate();                                                                                                  // 378
-  self.flush();                                                                                                       // 379
-};                                                                                                                    // 380
-                                                                                                                      // 381
-//                                                                                                                    // 382
-// http://docs.meteor.com/#tracker_dependency                                                                         // 383
-                                                                                                                      // 384
-/**                                                                                                                   // 385
- * @summary A Dependency represents an atomic unit of reactive data that a                                            // 386
- * computation might depend on. Reactive data sources such as Session or                                              // 387
- * Minimongo internally create different Dependency objects for different                                             // 388
- * pieces of data, each of which may be depended on by multiple computations.                                         // 389
- * When the data changes, the computations are invalidated.                                                           // 390
- * @class                                                                                                             // 391
- * @instanceName dependency                                                                                           // 392
- */                                                                                                                   // 393
-Tracker.Dependency = function () {                                                                                    // 394
-  this._dependentsById = {};                                                                                          // 395
-};                                                                                                                    // 396
-                                                                                                                      // 397
-// http://docs.meteor.com/#dependency_depend                                                                          // 398
-//                                                                                                                    // 399
-// Adds `computation` to this set if it is not already                                                                // 400
-// present.  Returns true if `computation` is a new member of the set.                                                // 401
-// If no argument, defaults to currentComputation, or does nothing                                                    // 402
-// if there is no currentComputation.                                                                                 // 403
-                                                                                                                      // 404
-/**                                                                                                                   // 405
+  self._recompute();                                                                                                  // 356
+};                                                                                                                    // 357
+                                                                                                                      // 358
+/**                                                                                                                   // 359
+ * @summary Causes the function inside this computation to run and                                                    // 360
+ * synchronously process all reactive updtes.                                                                         // 361
+ * @locus Client                                                                                                      // 362
+ */                                                                                                                   // 363
+Tracker.Computation.prototype.run = function () {                                                                     // 364
+  var self = this;                                                                                                    // 365
+  self.invalidate();                                                                                                  // 366
+  self.flush();                                                                                                       // 367
+};                                                                                                                    // 368
+                                                                                                                      // 369
+//                                                                                                                    // 370
+// http://docs.meteor.com/#tracker_dependency                                                                         // 371
+                                                                                                                      // 372
+/**                                                                                                                   // 373
+ * @summary A Dependency represents an atomic unit of reactive data that a                                            // 374
+ * computation might depend on. Reactive data sources such as Session or                                              // 375
+ * Minimongo internally create different Dependency objects for different                                             // 376
+ * pieces of data, each of which may be depended on by multiple computations.                                         // 377
+ * When the data changes, the computations are invalidated.                                                           // 378
+ * @class                                                                                                             // 379
+ * @instanceName dependency                                                                                           // 380
+ */                                                                                                                   // 381
+Tracker.Dependency = function () {                                                                                    // 382
+  this._dependentsById = {};                                                                                          // 383
+};                                                                                                                    // 384
+                                                                                                                      // 385
+// http://docs.meteor.com/#dependency_depend                                                                          // 386
+//                                                                                                                    // 387
+// Adds `computation` to this set if it is not already                                                                // 388
+// present.  Returns true if `computation` is a new member of the set.                                                // 389
+// If no argument, defaults to currentComputation, or does nothing                                                    // 390
+// if there is no currentComputation.                                                                                 // 391
+                                                                                                                      // 392
+/**                                                                                                                   // 393
  * @summary Declares that the current computation (or `fromComputation` if given) depends on `dependency`.  The computation will be invalidated the next time `dependency` changes.
-                                                                                                                      // 407
-If there is no current computation and `depend()` is called with no arguments, it does nothing and returns false.     // 408
-                                                                                                                      // 409
-Returns true if the computation is a new dependent of `dependency` rather than an existing one.                       // 410
- * @locus Client                                                                                                      // 411
+                                                                                                                      // 395
+If there is no current computation and `depend()` is called with no arguments, it does nothing and returns false.     // 396
+                                                                                                                      // 397
+Returns true if the computation is a new dependent of `dependency` rather than an existing one.                       // 398
+ * @locus Client                                                                                                      // 399
  * @param {Tracker.Computation} [fromComputation] An optional computation declared to depend on `dependency` instead of the current computation.
- * @returns {Boolean}                                                                                                 // 413
- */                                                                                                                   // 414
-Tracker.Dependency.prototype.depend = function (computation) {                                                        // 415
-  if (! computation) {                                                                                                // 416
-    if (! Tracker.active)                                                                                             // 417
-      return false;                                                                                                   // 418
-                                                                                                                      // 419
-    computation = Tracker.currentComputation;                                                                         // 420
-  }                                                                                                                   // 421
-  var self = this;                                                                                                    // 422
-  var id = computation._id;                                                                                           // 423
-  if (! (id in self._dependentsById)) {                                                                               // 424
-    self._dependentsById[id] = computation;                                                                           // 425
-    computation.onInvalidate(function () {                                                                            // 426
-      delete self._dependentsById[id];                                                                                // 427
-    });                                                                                                               // 428
-    return true;                                                                                                      // 429
-  }                                                                                                                   // 430
-  return false;                                                                                                       // 431
+ * @returns {Boolean}                                                                                                 // 401
+ */                                                                                                                   // 402
+Tracker.Dependency.prototype.depend = function (computation) {                                                        // 403
+  if (! computation) {                                                                                                // 404
+    if (! Tracker.active)                                                                                             // 405
+      return false;                                                                                                   // 406
+                                                                                                                      // 407
+    computation = Tracker.currentComputation;                                                                         // 408
+  }                                                                                                                   // 409
+  var self = this;                                                                                                    // 410
+  var id = computation._id;                                                                                           // 411
+  if (! (id in self._dependentsById)) {                                                                               // 412
+    self._dependentsById[id] = computation;                                                                           // 413
+    computation.onInvalidate(function () {                                                                            // 414
+      delete self._dependentsById[id];                                                                                // 415
+    });                                                                                                               // 416
+    return true;                                                                                                      // 417
+  }                                                                                                                   // 418
+  return false;                                                                                                       // 419
+};                                                                                                                    // 420
+                                                                                                                      // 421
+// http://docs.meteor.com/#dependency_changed                                                                         // 422
+                                                                                                                      // 423
+/**                                                                                                                   // 424
+ * @summary Invalidate all dependent computations immediately and remove them as dependents.                          // 425
+ * @locus Client                                                                                                      // 426
+ */                                                                                                                   // 427
+Tracker.Dependency.prototype.changed = function () {                                                                  // 428
+  var self = this;                                                                                                    // 429
+  for (var id in self._dependentsById)                                                                                // 430
+    self._dependentsById[id].invalidate();                                                                            // 431
 };                                                                                                                    // 432
                                                                                                                       // 433
-// http://docs.meteor.com/#dependency_changed                                                                         // 434
+// http://docs.meteor.com/#dependency_hasdependents                                                                   // 434
                                                                                                                       // 435
 /**                                                                                                                   // 436
- * @summary Invalidate all dependent computations immediately and remove them as dependents.                          // 437
- * @locus Client                                                                                                      // 438
- */                                                                                                                   // 439
-Tracker.Dependency.prototype.changed = function () {                                                                  // 440
-  var self = this;                                                                                                    // 441
-  for (var id in self._dependentsById)                                                                                // 442
-    self._dependentsById[id].invalidate();                                                                            // 443
-};                                                                                                                    // 444
-                                                                                                                      // 445
-// http://docs.meteor.com/#dependency_hasdependents                                                                   // 446
-                                                                                                                      // 447
-/**                                                                                                                   // 448
  * @summary True if this Dependency has one or more dependent Computations, which would be invalidated if this Dependency were to change.
- * @locus Client                                                                                                      // 450
- * @returns {Boolean}                                                                                                 // 451
- */                                                                                                                   // 452
-Tracker.Dependency.prototype.hasDependents = function () {                                                            // 453
-  var self = this;                                                                                                    // 454
-  for(var id in self._dependentsById)                                                                                 // 455
-    return true;                                                                                                      // 456
-  return false;                                                                                                       // 457
-};                                                                                                                    // 458
-                                                                                                                      // 459
-// http://docs.meteor.com/#tracker_flush                                                                              // 460
-                                                                                                                      // 461
-/**                                                                                                                   // 462
- * @summary Process all reactive updates immediately and ensure that all invalidated computations are rerun.          // 463
- * @locus Client                                                                                                      // 464
- */                                                                                                                   // 465
-Tracker.flush = function (options) {                                                                                  // 466
-  Tracker._runFlush({ finishSynchronously: true,                                                                      // 467
-                      throwFirstError: options && options._throwFirstError });                                        // 468
-};                                                                                                                    // 469
-                                                                                                                      // 470
-// Run all pending computations and afterFlush callbacks.  If we were not called                                      // 471
-// directly via Tracker.flush, this may return before they're all done to allow                                       // 472
-// the event loop to run a little before continuing.                                                                  // 473
-Tracker._runFlush = function (options) {                                                                              // 474
-  // XXX What part of the comment below is still true? (We no longer                                                  // 475
-  // have Spark)                                                                                                      // 476
-  //                                                                                                                  // 477
-  // Nested flush could plausibly happen if, say, a flush causes                                                      // 478
-  // DOM mutation, which causes a "blur" event, which runs an                                                         // 479
-  // app event handler that calls Tracker.flush.  At the moment                                                       // 480
-  // Spark blocks event handlers during DOM mutation anyway,                                                          // 481
-  // because the LiveRange tree isn't valid.  And we don't have                                                       // 482
-  // any useful notion of a nested flush.                                                                             // 483
-  //                                                                                                                  // 484
-  // https://app.asana.com/0/159908330244/385138233856                                                                // 485
-  if (inFlush)                                                                                                        // 486
-    throw new Error("Can't call Tracker.flush while flushing");                                                       // 487
-                                                                                                                      // 488
-  if (inCompute)                                                                                                      // 489
-    throw new Error("Can't flush inside Tracker.autorun");                                                            // 490
+ * @locus Client                                                                                                      // 438
+ * @returns {Boolean}                                                                                                 // 439
+ */                                                                                                                   // 440
+Tracker.Dependency.prototype.hasDependents = function () {                                                            // 441
+  var self = this;                                                                                                    // 442
+  for(var id in self._dependentsById)                                                                                 // 443
+    return true;                                                                                                      // 444
+  return false;                                                                                                       // 445
+};                                                                                                                    // 446
+                                                                                                                      // 447
+// http://docs.meteor.com/#tracker_flush                                                                              // 448
+                                                                                                                      // 449
+/**                                                                                                                   // 450
+ * @summary Process all reactive updates immediately and ensure that all invalidated computations are rerun.          // 451
+ * @locus Client                                                                                                      // 452
+ */                                                                                                                   // 453
+Tracker.flush = function (options) {                                                                                  // 454
+  Tracker._runFlush({ finishSynchronously: true,                                                                      // 455
+                      throwFirstError: options && options._throwFirstError });                                        // 456
+};                                                                                                                    // 457
+                                                                                                                      // 458
+// Run all pending computations and afterFlush callbacks.  If we were not called                                      // 459
+// directly via Tracker.flush, this may return before they're all done to allow                                       // 460
+// the event loop to run a little before continuing.                                                                  // 461
+Tracker._runFlush = function (options) {                                                                              // 462
+  // XXX What part of the comment below is still true? (We no longer                                                  // 463
+  // have Spark)                                                                                                      // 464
+  //                                                                                                                  // 465
+  // Nested flush could plausibly happen if, say, a flush causes                                                      // 466
+  // DOM mutation, which causes a "blur" event, which runs an                                                         // 467
+  // app event handler that calls Tracker.flush.  At the moment                                                       // 468
+  // Spark blocks event handlers during DOM mutation anyway,                                                          // 469
+  // because the LiveRange tree isn't valid.  And we don't have                                                       // 470
+  // any useful notion of a nested flush.                                                                             // 471
+  //                                                                                                                  // 472
+  // https://app.asana.com/0/159908330244/385138233856                                                                // 473
+  if (inFlush)                                                                                                        // 474
+    throw new Error("Can't call Tracker.flush while flushing");                                                       // 475
+                                                                                                                      // 476
+  if (inCompute)                                                                                                      // 477
+    throw new Error("Can't flush inside Tracker.autorun");                                                            // 478
+                                                                                                                      // 479
+  options = options || {};                                                                                            // 480
+                                                                                                                      // 481
+  inFlush = true;                                                                                                     // 482
+  willFlush = true;                                                                                                   // 483
+  throwFirstError = !! options.throwFirstError;                                                                       // 484
+                                                                                                                      // 485
+  var recomputedCount = 0;                                                                                            // 486
+  var finishedTry = false;                                                                                            // 487
+  try {                                                                                                               // 488
+    while (pendingComputations.length ||                                                                              // 489
+           afterFlushCallbacks.length) {                                                                              // 490
                                                                                                                       // 491
-  options = options || {};                                                                                            // 492
-                                                                                                                      // 493
-  inFlush = true;                                                                                                     // 494
-  willFlush = true;                                                                                                   // 495
-  throwFirstError = !! options.throwFirstError;                                                                       // 496
-                                                                                                                      // 497
-  var recomputedCount = 0;                                                                                            // 498
-  var finishedTry = false;                                                                                            // 499
-  try {                                                                                                               // 500
-    while (pendingComputations.length ||                                                                              // 501
-           afterFlushCallbacks.length) {                                                                              // 502
-                                                                                                                      // 503
-      // recompute all pending computations                                                                           // 504
-      while (pendingComputations.length) {                                                                            // 505
-        var comp = pendingComputations.shift();                                                                       // 506
-        comp._recompute();                                                                                            // 507
-        if (comp._needsRecompute()) {                                                                                 // 508
-          pendingComputations.unshift(comp);                                                                          // 509
-        }                                                                                                             // 510
-                                                                                                                      // 511
-        if (! options.finishSynchronously && ++recomputedCount > 1000) {                                              // 512
-          finishedTry = true;                                                                                         // 513
-          return;                                                                                                     // 514
-        }                                                                                                             // 515
-      }                                                                                                               // 516
-                                                                                                                      // 517
-      if (afterFlushCallbacks.length) {                                                                               // 518
-        // call one afterFlush callback, which may                                                                    // 519
-        // invalidate more computations                                                                               // 520
-        var func = afterFlushCallbacks.shift();                                                                       // 521
-        try {                                                                                                         // 522
-          func();                                                                                                     // 523
-        } catch (e) {                                                                                                 // 524
-          _throwOrLog("afterFlush", e);                                                                               // 525
-        }                                                                                                             // 526
-      }                                                                                                               // 527
-    }                                                                                                                 // 528
-    finishedTry = true;                                                                                               // 529
-  } finally {                                                                                                         // 530
-    if (! finishedTry) {                                                                                              // 531
-      // we're erroring due to throwFirstError being true.                                                            // 532
-      inFlush = false; // needed before calling `Tracker.flush()` again                                               // 533
-      // finish flushing                                                                                              // 534
-      Tracker._runFlush({                                                                                             // 535
-        finishSynchronously: options.finishSynchronously,                                                             // 536
-        throwFirstError: false                                                                                        // 537
-      });                                                                                                             // 538
-    }                                                                                                                 // 539
-    willFlush = false;                                                                                                // 540
-    inFlush = false;                                                                                                  // 541
-    if (pendingComputations.length || afterFlushCallbacks.length) {                                                   // 542
-      // We're yielding because we ran a bunch of computations and we aren't                                          // 543
-      // required to finish synchronously, so we'd like to give the event loop a                                      // 544
-      // chance. We should flush again soon.                                                                          // 545
-      if (options.finishSynchronously) {                                                                              // 546
-        throw new Error("still have more to do?");  // shouldn't happen                                               // 547
-      }                                                                                                               // 548
-      setTimeout(requireFlush, 10);                                                                                   // 549
-    }                                                                                                                 // 550
-  }                                                                                                                   // 551
-};                                                                                                                    // 552
-                                                                                                                      // 553
-// http://docs.meteor.com/#tracker_autorun                                                                            // 554
-//                                                                                                                    // 555
-// Run f(). Record its dependencies. Rerun it whenever the                                                            // 556
-// dependencies change.                                                                                               // 557
-//                                                                                                                    // 558
-// Returns a new Computation, which is also passed to f.                                                              // 559
-//                                                                                                                    // 560
-// Links the computation to the current computation                                                                   // 561
-// so that it is stopped if the current computation is invalidated.                                                   // 562
-                                                                                                                      // 563
-/**                                                                                                                   // 564
- * @callback Tracker.ComputationFunction                                                                              // 565
- * @param {Tracker.Computation}                                                                                       // 566
- */                                                                                                                   // 567
-/**                                                                                                                   // 568
- * @summary Run a function now and rerun it later whenever its dependencies                                           // 569
- * change. Returns a Computation object that can be used to stop or observe the                                       // 570
- * rerunning.                                                                                                         // 571
- * @locus Client                                                                                                      // 572
- * @param {Tracker.ComputationFunction} runFunc The function to run. It receives                                      // 573
- * one argument: the Computation object that will be returned.                                                        // 574
- * @param {Object} [options]                                                                                          // 575
- * @param {Function} options.onError Optional. The function to run when an error                                      // 576
- * happens in the Computation. The only argument it recieves is the Error                                             // 577
- * thrown. Defaults to the error being logged to the console.                                                         // 578
- * @returns {Tracker.Computation}                                                                                     // 579
- */                                                                                                                   // 580
-Tracker.autorun = function (f, options) {                                                                             // 581
-  if (typeof f !== 'function')                                                                                        // 582
-    throw new Error('Tracker.autorun requires a function argument');                                                  // 583
-                                                                                                                      // 584
-  options = options || {};                                                                                            // 585
+      // recompute all pending computations                                                                           // 492
+      while (pendingComputations.length) {                                                                            // 493
+        var comp = pendingComputations.shift();                                                                       // 494
+        comp._recompute();                                                                                            // 495
+        if (comp._needsRecompute()) {                                                                                 // 496
+          pendingComputations.unshift(comp);                                                                          // 497
+        }                                                                                                             // 498
+                                                                                                                      // 499
+        if (! options.finishSynchronously && ++recomputedCount > 1000) {                                              // 500
+          finishedTry = true;                                                                                         // 501
+          return;                                                                                                     // 502
+        }                                                                                                             // 503
+      }                                                                                                               // 504
+                                                                                                                      // 505
+      if (afterFlushCallbacks.length) {                                                                               // 506
+        // call one afterFlush callback, which may                                                                    // 507
+        // invalidate more computations                                                                               // 508
+        var func = afterFlushCallbacks.shift();                                                                       // 509
+        try {                                                                                                         // 510
+          func();                                                                                                     // 511
+        } catch (e) {                                                                                                 // 512
+          _throwOrLog("afterFlush", e);                                                                               // 513
+        }                                                                                                             // 514
+      }                                                                                                               // 515
+    }                                                                                                                 // 516
+    finishedTry = true;                                                                                               // 517
+  } finally {                                                                                                         // 518
+    if (! finishedTry) {                                                                                              // 519
+      // we're erroring due to throwFirstError being true.                                                            // 520
+      inFlush = false; // needed before calling `Tracker.flush()` again                                               // 521
+      // finish flushing                                                                                              // 522
+      Tracker._runFlush({                                                                                             // 523
+        finishSynchronously: options.finishSynchronously,                                                             // 524
+        throwFirstError: false                                                                                        // 525
+      });                                                                                                             // 526
+    }                                                                                                                 // 527
+    willFlush = false;                                                                                                // 528
+    inFlush = false;                                                                                                  // 529
+    if (pendingComputations.length || afterFlushCallbacks.length) {                                                   // 530
+      // We're yielding because we ran a bunch of computations and we aren't                                          // 531
+      // required to finish synchronously, so we'd like to give the event loop a                                      // 532
+      // chance. We should flush again soon.                                                                          // 533
+      if (options.finishSynchronously) {                                                                              // 534
+        throw new Error("still have more to do?");  // shouldn't happen                                               // 535
+      }                                                                                                               // 536
+      setTimeout(requireFlush, 10);                                                                                   // 537
+    }                                                                                                                 // 538
+  }                                                                                                                   // 539
+};                                                                                                                    // 540
+                                                                                                                      // 541
+// http://docs.meteor.com/#tracker_autorun                                                                            // 542
+//                                                                                                                    // 543
+// Run f(). Record its dependencies. Rerun it whenever the                                                            // 544
+// dependencies change.                                                                                               // 545
+//                                                                                                                    // 546
+// Returns a new Computation, which is also passed to f.                                                              // 547
+//                                                                                                                    // 548
+// Links the computation to the current computation                                                                   // 549
+// so that it is stopped if the current computation is invalidated.                                                   // 550
+                                                                                                                      // 551
+/**                                                                                                                   // 552
+ * @callback Tracker.ComputationFunction                                                                              // 553
+ * @param {Tracker.Computation}                                                                                       // 554
+ */                                                                                                                   // 555
+/**                                                                                                                   // 556
+ * @summary Run a function now and rerun it later whenever its dependencies                                           // 557
+ * change. Returns a Computation object that can be used to stop or observe the                                       // 558
+ * rerunning.                                                                                                         // 559
+ * @locus Client                                                                                                      // 560
+ * @param {Tracker.ComputationFunction} runFunc The function to run. It receives                                      // 561
+ * one argument: the Computation object that will be returned.                                                        // 562
+ * @param {Object} [options]                                                                                          // 563
+ * @param {Function} options.onError Optional. The function to run when an error                                      // 564
+ * happens in the Computation. The only argument it recieves is the Error                                             // 565
+ * thrown. Defaults to the error being logged to the console.                                                         // 566
+ * @returns {Tracker.Computation}                                                                                     // 567
+ */                                                                                                                   // 568
+Tracker.autorun = function (f, options) {                                                                             // 569
+  if (typeof f !== 'function')                                                                                        // 570
+    throw new Error('Tracker.autorun requires a function argument');                                                  // 571
+                                                                                                                      // 572
+  options = options || {};                                                                                            // 573
+                                                                                                                      // 574
+  constructingComputation = true;                                                                                     // 575
+  var c = new Tracker.Computation(                                                                                    // 576
+    f, Tracker.currentComputation, options.onError);                                                                  // 577
+                                                                                                                      // 578
+  if (Tracker.active)                                                                                                 // 579
+    Tracker.onInvalidate(function () {                                                                                // 580
+      c.stop();                                                                                                       // 581
+    });                                                                                                               // 582
+                                                                                                                      // 583
+  return c;                                                                                                           // 584
+};                                                                                                                    // 585
                                                                                                                       // 586
-  constructingComputation = true;                                                                                     // 587
-  var c = new Tracker.Computation(                                                                                    // 588
-    f, Tracker.currentComputation, options.onError);                                                                  // 589
-                                                                                                                      // 590
-  if (Tracker.active)                                                                                                 // 591
-    Tracker.onInvalidate(function () {                                                                                // 592
-      c.stop();                                                                                                       // 593
-    });                                                                                                               // 594
-                                                                                                                      // 595
-  return c;                                                                                                           // 596
-};                                                                                                                    // 597
-                                                                                                                      // 598
-// http://docs.meteor.com/#tracker_nonreactive                                                                        // 599
-//                                                                                                                    // 600
-// Run `f` with no current computation, returning the return value                                                    // 601
-// of `f`.  Used to turn off reactivity for the duration of `f`,                                                      // 602
-// so that reactive data sources accessed by `f` will not result in any                                               // 603
-// computations being invalidated.                                                                                    // 604
-                                                                                                                      // 605
-/**                                                                                                                   // 606
- * @summary Run a function without tracking dependencies.                                                             // 607
- * @locus Client                                                                                                      // 608
- * @param {Function} func A function to call immediately.                                                             // 609
- */                                                                                                                   // 610
-Tracker.nonreactive = function (f) {                                                                                  // 611
-  var previous = Tracker.currentComputation;                                                                          // 612
-  setCurrentComputation(null);                                                                                        // 613
-  try {                                                                                                               // 614
-    return f();                                                                                                       // 615
-  } finally {                                                                                                         // 616
-    setCurrentComputation(previous);                                                                                  // 617
-  }                                                                                                                   // 618
-};                                                                                                                    // 619
-                                                                                                                      // 620
-// http://docs.meteor.com/#tracker_oninvalidate                                                                       // 621
-                                                                                                                      // 622
-/**                                                                                                                   // 623
+// http://docs.meteor.com/#tracker_nonreactive                                                                        // 587
+//                                                                                                                    // 588
+// Run `f` with no current computation, returning the return value                                                    // 589
+// of `f`.  Used to turn off reactivity for the duration of `f`,                                                      // 590
+// so that reactive data sources accessed by `f` will not result in any                                               // 591
+// computations being invalidated.                                                                                    // 592
+                                                                                                                      // 593
+/**                                                                                                                   // 594
+ * @summary Run a function without tracking dependencies.                                                             // 595
+ * @locus Client                                                                                                      // 596
+ * @param {Function} func A function to call immediately.                                                             // 597
+ */                                                                                                                   // 598
+Tracker.nonreactive = function (f) {                                                                                  // 599
+  var previous = Tracker.currentComputation;                                                                          // 600
+  setCurrentComputation(null);                                                                                        // 601
+  try {                                                                                                               // 602
+    return f();                                                                                                       // 603
+  } finally {                                                                                                         // 604
+    setCurrentComputation(previous);                                                                                  // 605
+  }                                                                                                                   // 606
+};                                                                                                                    // 607
+                                                                                                                      // 608
+// http://docs.meteor.com/#tracker_oninvalidate                                                                       // 609
+                                                                                                                      // 610
+/**                                                                                                                   // 611
  * @summary Registers a new [`onInvalidate`](#computation_oninvalidate) callback on the current computation (which must exist), to be called immediately when the current computation is invalidated or stopped.
- * @locus Client                                                                                                      // 625
+ * @locus Client                                                                                                      // 613
  * @param {Function} callback A callback function that will be invoked as `func(c)`, where `c` is the computation on which the callback is registered.
- */                                                                                                                   // 627
-Tracker.onInvalidate = function (f) {                                                                                 // 628
-  if (! Tracker.active)                                                                                               // 629
-    throw new Error("Tracker.onInvalidate requires a currentComputation");                                            // 630
-                                                                                                                      // 631
-  Tracker.currentComputation.onInvalidate(f);                                                                         // 632
+ */                                                                                                                   // 615
+Tracker.onInvalidate = function (f) {                                                                                 // 616
+  if (! Tracker.active)                                                                                               // 617
+    throw new Error("Tracker.onInvalidate requires a currentComputation");                                            // 618
+                                                                                                                      // 619
+  Tracker.currentComputation.onInvalidate(f);                                                                         // 620
+};                                                                                                                    // 621
+                                                                                                                      // 622
+// http://docs.meteor.com/#tracker_afterflush                                                                         // 623
+                                                                                                                      // 624
+/**                                                                                                                   // 625
+ * @summary Schedules a function to be called during the next flush, or later in the current flush if one is in progress, after all invalidated computations have been rerun.  The function will be run once and not on subsequent flushes unless `afterFlush` is called again.
+ * @locus Client                                                                                                      // 627
+ * @param {Function} callback A function to call at flush time.                                                       // 628
+ */                                                                                                                   // 629
+Tracker.afterFlush = function (f) {                                                                                   // 630
+  afterFlushCallbacks.push(f);                                                                                        // 631
+  requireFlush();                                                                                                     // 632
 };                                                                                                                    // 633
                                                                                                                       // 634
-// http://docs.meteor.com/#tracker_afterflush                                                                         // 635
-                                                                                                                      // 636
-/**                                                                                                                   // 637
- * @summary Schedules a function to be called during the next flush, or later in the current flush if one is in progress, after all invalidated computations have been rerun.  The function will be run once and not on subsequent flushes unless `afterFlush` is called again.
- * @locus Client                                                                                                      // 639
- * @param {Function} callback A function to call at flush time.                                                       // 640
- */                                                                                                                   // 641
-Tracker.afterFlush = function (f) {                                                                                   // 642
-  afterFlushCallbacks.push(f);                                                                                        // 643
-  requireFlush();                                                                                                     // 644
-};                                                                                                                    // 645
-                                                                                                                      // 646
 ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 
 }).call(this);
@@ -23213,6 +23206,1659 @@ if (typeof Package === 'undefined') Package = {};
 });
 
 })();
+//////////////////////////////////////////////////////////////////////////
+//                                                                      //
+// This is a generated file. You can view the original                  //
+// source in your browser if your browser supports source maps.         //
+// Source maps are supported by all recent versions of Chrome, Safari,  //
+// and Firefox, and by Internet Explorer 11.                            //
+//                                                                      //
+//////////////////////////////////////////////////////////////////////////
+
+
+(function () {
+
+/* Imports */
+var Meteor = Package.meteor.Meteor;
+var global = Package.meteor.global;
+var meteorEnv = Package.meteor.meteorEnv;
+var Random = Package.random.Random;
+
+(function(){
+
+//////////////////////////////////////////////////////////////////////////////////////
+//                                                                                  //
+// packages/localstorage/localstorage.js                                            //
+//                                                                                  //
+//////////////////////////////////////////////////////////////////////////////////////
+                                                                                    //
+// Meteor._localStorage is not an ideal name, but we can change it later.           // 1
+                                                                                    // 2
+// Let's test to make sure that localStorage actually works. For example, in        // 3
+// Safari with private browsing on, window.localStorage exists but actually         // 4
+// trying to use it throws.                                                         // 5
+// Accessing window.localStorage can also immediately throw an error in IE (#1291).
+                                                                                    // 7
+var key = '_localstorage_test_' + Random.id();                                      // 8
+var retrieved;                                                                      // 9
+try {                                                                               // 10
+  if (window.localStorage) {                                                        // 11
+    window.localStorage.setItem(key, key);                                          // 12
+    retrieved = window.localStorage.getItem(key);                                   // 13
+    window.localStorage.removeItem(key);                                            // 14
+  }                                                                                 // 15
+} catch (e) {                                                                       // 16
+  // ... ignore                                                                     // 17
+}                                                                                   // 18
+if (key === retrieved) {                                                            // 19
+  Meteor._localStorage = {                                                          // 20
+    getItem: function (key) {                                                       // 21
+      return window.localStorage.getItem(key);                                      // 22
+    },                                                                              // 23
+    setItem: function (key, value) {                                                // 24
+      window.localStorage.setItem(key, value);                                      // 25
+    },                                                                              // 26
+    removeItem: function (key) {                                                    // 27
+      window.localStorage.removeItem(key);                                          // 28
+    }                                                                               // 29
+  };                                                                                // 30
+}                                                                                   // 31
+                                                                                    // 32
+if (!Meteor._localStorage) {                                                        // 33
+  Meteor._debug(                                                                    // 34
+    "You are running a browser with no localStorage or userData "                   // 35
+      + "support. Logging in from one tab will not cause another "                  // 36
+      + "tab to be logged in.");                                                    // 37
+                                                                                    // 38
+  Meteor._localStorage = {                                                          // 39
+    _data: {},                                                                      // 40
+                                                                                    // 41
+    setItem: function (key, val) {                                                  // 42
+      this._data[key] = val;                                                        // 43
+    },                                                                              // 44
+    removeItem: function (key) {                                                    // 45
+      delete this._data[key];                                                       // 46
+    },                                                                              // 47
+    getItem: function (key) {                                                       // 48
+      var value = this._data[key];                                                  // 49
+      if (value === undefined)                                                      // 50
+        return null;                                                                // 51
+      else                                                                          // 52
+        return value;                                                               // 53
+    }                                                                               // 54
+  };                                                                                // 55
+}                                                                                   // 56
+                                                                                    // 57
+//////////////////////////////////////////////////////////////////////////////////////
+
+}).call(this);
+
+
+/* Exports */
+if (typeof Package === 'undefined') Package = {};
+Package.localstorage = {};
+
+})();
+//////////////////////////////////////////////////////////////////////////
+//                                                                      //
+// This is a generated file. You can view the original                  //
+// source in your browser if your browser supports source maps.         //
+// Source maps are supported by all recent versions of Chrome, Safari,  //
+// and Firefox, and by Internet Explorer 11.                            //
+//                                                                      //
+//////////////////////////////////////////////////////////////////////////
+
+
+(function () {
+
+/* Imports */
+var Meteor = Package.meteor.Meteor;
+var global = Package.meteor.global;
+var meteorEnv = Package.meteor.meteorEnv;
+var _ = Package.underscore._;
+
+/* Package-scope variables */
+var Hook;
+
+(function(){
+
+////////////////////////////////////////////////////////////////////////////////////
+//                                                                                //
+// packages/callback-hook/hook.js                                                 //
+//                                                                                //
+////////////////////////////////////////////////////////////////////////////////////
+                                                                                  //
+// XXX This pattern is under development. Do not add more callsites               // 1
+// using this package for now. See:                                               // 2
+// https://meteor.hackpad.com/Design-proposal-Hooks-YxvgEW06q6f                   // 3
+//                                                                                // 4
+// Encapsulates the pattern of registering callbacks on a hook.                   // 5
+//                                                                                // 6
+// The `each` method of the hook calls its iterator function argument             // 7
+// with each registered callback.  This allows the hook to                        // 8
+// conditionally decide not to call the callback (if, for example, the            // 9
+// observed object has been closed or terminated).                                // 10
+//                                                                                // 11
+// By default, callbacks are bound with `Meteor.bindEnvironment`, so they will be
+// called with the Meteor environment of the calling code that                    // 13
+// registered the callback. Override by passing { bindEnvironment: false }        // 14
+// to the constructor.                                                            // 15
+//                                                                                // 16
+// Registering a callback returns an object with a single `stop`                  // 17
+// method which unregisters the callback.                                         // 18
+//                                                                                // 19
+// The code is careful to allow a callback to be safely unregistered              // 20
+// while the callbacks are being iterated over.                                   // 21
+//                                                                                // 22
+// If the hook is configured with the `exceptionHandler` option, the              // 23
+// handler will be called if a called callback throws an exception.               // 24
+// By default (if the exception handler doesn't itself throw an                   // 25
+// exception, or if the iterator function doesn't return a falsy value            // 26
+// to terminate the calling of callbacks), the remaining callbacks                // 27
+// will still be called.                                                          // 28
+//                                                                                // 29
+// Alternatively, the `debugPrintExceptions` option can be specified              // 30
+// as string describing the callback.  On an exception the string and             // 31
+// the exception will be printed to the console log with                          // 32
+// `Meteor._debug`, and the exception otherwise ignored.                          // 33
+//                                                                                // 34
+// If an exception handler isn't specified, exceptions thrown in the              // 35
+// callback will propagate up to the iterator function, and will                  // 36
+// terminate calling the remaining callbacks if not caught.                       // 37
+                                                                                  // 38
+Hook = function (options) {                                                       // 39
+  var self = this;                                                                // 40
+  options = options || {};                                                        // 41
+  self.nextCallbackId = 0;                                                        // 42
+  self.callbacks = {};                                                            // 43
+  // Whether to wrap callbacks with Meteor.bindEnvironment                        // 44
+  self.bindEnvironment = true;                                                    // 45
+  if (options.bindEnvironment === false)                                          // 46
+    self.bindEnvironment = false;                                                 // 47
+                                                                                  // 48
+  if (options.exceptionHandler)                                                   // 49
+    self.exceptionHandler = options.exceptionHandler;                             // 50
+  else if (options.debugPrintExceptions) {                                        // 51
+    if (! _.isString(options.debugPrintExceptions))                               // 52
+      throw new Error("Hook option debugPrintExceptions should be a string");     // 53
+    self.exceptionHandler = options.debugPrintExceptions;                         // 54
+  }                                                                               // 55
+};                                                                                // 56
+                                                                                  // 57
+_.extend(Hook.prototype, {                                                        // 58
+  register: function (callback) {                                                 // 59
+    var self = this;                                                              // 60
+    var exceptionHandler =  self.exceptionHandler || function (exception) {       // 61
+      // Note: this relies on the undocumented fact that if bindEnvironment's     // 62
+      // onException throws, and you are invoking the callback either in the      // 63
+      // browser or from within a Fiber in Node, the exception is propagated.     // 64
+      throw exception;                                                            // 65
+    };                                                                            // 66
+                                                                                  // 67
+    if (self.bindEnvironment) {                                                   // 68
+      callback = Meteor.bindEnvironment(callback, exceptionHandler);              // 69
+    } else {                                                                      // 70
+      callback = dontBindEnvironment(callback, exceptionHandler);                 // 71
+    }                                                                             // 72
+                                                                                  // 73
+    var id = self.nextCallbackId++;                                               // 74
+    self.callbacks[id] = callback;                                                // 75
+                                                                                  // 76
+    return {                                                                      // 77
+      stop: function () {                                                         // 78
+        delete self.callbacks[id];                                                // 79
+      }                                                                           // 80
+    };                                                                            // 81
+  },                                                                              // 82
+                                                                                  // 83
+  // For each registered callback, call the passed iterator function              // 84
+  // with the callback.                                                           // 85
+  //                                                                              // 86
+  // The iterator function can choose whether or not to call the                  // 87
+  // callback.  (For example, it might not call the callback if the               // 88
+  // observed object has been closed or terminated).                              // 89
+  //                                                                              // 90
+  // The iteration is stopped if the iterator function returns a falsy            // 91
+  // value or throws an exception.                                                // 92
+  //                                                                              // 93
+  each: function (iterator) {                                                     // 94
+    var self = this;                                                              // 95
+                                                                                  // 96
+    // Invoking bindEnvironment'd callbacks outside of a Fiber in Node doesn't    // 97
+    // run them to completion (and exceptions thrown from onException are not     // 98
+    // propagated), so we need to be in a Fiber.                                  // 99
+    Meteor._nodeCodeMustBeInFiber();                                              // 100
+                                                                                  // 101
+    var ids = _.keys(self.callbacks);                                             // 102
+    for (var i = 0;  i < ids.length;  ++i) {                                      // 103
+      var id = ids[i];                                                            // 104
+      // check to see if the callback was removed during iteration                // 105
+      if (_.has(self.callbacks, id)) {                                            // 106
+        var callback = self.callbacks[id];                                        // 107
+                                                                                  // 108
+        if (! iterator(callback))                                                 // 109
+          break;                                                                  // 110
+      }                                                                           // 111
+    }                                                                             // 112
+  }                                                                               // 113
+});                                                                               // 114
+                                                                                  // 115
+// Copied from Meteor.bindEnvironment and removed all the env stuff.              // 116
+var dontBindEnvironment = function (func, onException, _this) {                   // 117
+  if (!onException || typeof(onException) === 'string') {                         // 118
+    var description = onException || "callback of async function";                // 119
+    onException = function (error) {                                              // 120
+      Meteor._debug(                                                              // 121
+        "Exception in " + description + ":",                                      // 122
+        error && error.stack || error                                             // 123
+      );                                                                          // 124
+    };                                                                            // 125
+  }                                                                               // 126
+                                                                                  // 127
+  return function (/* arguments */) {                                             // 128
+    var args = _.toArray(arguments);                                              // 129
+                                                                                  // 130
+    var runAndHandleExceptions = function () {                                    // 131
+      try {                                                                       // 132
+        var ret = func.apply(_this, args);                                        // 133
+      } catch (e) {                                                               // 134
+        onException(e);                                                           // 135
+      }                                                                           // 136
+      return ret;                                                                 // 137
+    };                                                                            // 138
+                                                                                  // 139
+    return runAndHandleExceptions();                                              // 140
+  };                                                                              // 141
+};                                                                                // 142
+                                                                                  // 143
+////////////////////////////////////////////////////////////////////////////////////
+
+}).call(this);
+
+
+/* Exports */
+if (typeof Package === 'undefined') Package = {};
+(function (pkg, symbols) {
+  for (var s in symbols)
+    (s in pkg) || (pkg[s] = symbols[s]);
+})(Package['callback-hook'] = {}, {
+  Hook: Hook
+});
+
+})();
+//////////////////////////////////////////////////////////////////////////
+//                                                                      //
+// This is a generated file. You can view the original                  //
+// source in your browser if your browser supports source maps.         //
+// Source maps are supported by all recent versions of Chrome, Safari,  //
+// and Firefox, and by Internet Explorer 11.                            //
+//                                                                      //
+//////////////////////////////////////////////////////////////////////////
+
+
+(function () {
+
+/* Imports */
+var Meteor = Package.meteor.Meteor;
+var global = Package.meteor.global;
+var meteorEnv = Package.meteor.meteorEnv;
+var _ = Package.underscore._;
+var Tracker = Package.tracker.Tracker;
+var Deps = Package.tracker.Deps;
+var Random = Package.random.Random;
+var Hook = Package['callback-hook'].Hook;
+var DDP = Package['ddp-client'].DDP;
+var Mongo = Package.mongo.Mongo;
+var meteorInstall = Package.modules.meteorInstall;
+var Buffer = Package.modules.Buffer;
+var process = Package.modules.process;
+var Symbol = Package['ecmascript-runtime'].Symbol;
+var Map = Package['ecmascript-runtime'].Map;
+var Set = Package['ecmascript-runtime'].Set;
+var meteorBabelHelpers = Package['babel-runtime'].meteorBabelHelpers;
+var Promise = Package.promise.Promise;
+
+/* Package-scope variables */
+var Accounts, EXPIRE_TOKENS_INTERVAL_MS, CONNECTION_CLOSE_DELAY_MS;
+
+var require = meteorInstall({"node_modules":{"meteor":{"accounts-base":{"client_main.js":["./accounts_client.js","./url_client.js","./localstorage_token.js",function(require,exports,module){
+
+///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+//                                                                                                                   //
+// packages/accounts-base/client_main.js                                                                             //
+//                                                                                                                   //
+///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+                                                                                                                     //
+exports.__esModule = true;                                                                                           //
+exports.AccountsTest = exports.AccountsClient = undefined;                                                           //
+                                                                                                                     //
+var _accounts_client = require("./accounts_client.js");                                                              // 1
+                                                                                                                     //
+var _url_client = require("./url_client.js");                                                                        // 2
+                                                                                                                     //
+require("./localstorage_token.js");                                                                                  // 3
+                                                                                                                     //
+/**                                                                                                                  //
+ * @namespace Accounts                                                                                               //
+ * @summary The namespace for all client-side accounts-related methods.                                              //
+ */                                                                                                                  //
+Accounts = new _accounts_client.AccountsClient();                                                                    // 9
+                                                                                                                     //
+/**                                                                                                                  //
+ * @summary A [Mongo.Collection](#collections) containing user documents.                                            //
+ * @locus Anywhere                                                                                                   //
+ * @type {Mongo.Collection}                                                                                          //
+ * @importFromPackage meteor                                                                                         //
+ */                                                                                                                  //
+Meteor.users = Accounts.users;                                                                                       // 17
+                                                                                                                     //
+exports.                                                                                                             //
+// Since this file is the main module for the client version of the                                                  //
+// accounts-base package, properties of non-entry-point modules need to                                              //
+// be re-exported in order to be accessible to modules that import the                                               //
+// accounts-base package.                                                                                            //
+AccountsClient = _accounts_client.AccountsClient;                                                                    // 24
+exports.AccountsTest = _url_client.AccountsTest;                                                                     //
+///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+
+}],"accounts_client.js":["babel-runtime/helpers/classCallCheck","babel-runtime/helpers/possibleConstructorReturn","babel-runtime/helpers/inherits","./accounts_common.js",function(require,exports){
+
+///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+//                                                                                                                   //
+// packages/accounts-base/accounts_client.js                                                                         //
+//                                                                                                                   //
+///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+                                                                                                                     //
+exports.__esModule = true;                                                                                           //
+exports.AccountsClient = undefined;                                                                                  //
+                                                                                                                     //
+var _classCallCheck2 = require("babel-runtime/helpers/classCallCheck");                                              //
+                                                                                                                     //
+var _classCallCheck3 = _interopRequireDefault(_classCallCheck2);                                                     //
+                                                                                                                     //
+var _possibleConstructorReturn2 = require("babel-runtime/helpers/possibleConstructorReturn");                        //
+                                                                                                                     //
+var _possibleConstructorReturn3 = _interopRequireDefault(_possibleConstructorReturn2);                               //
+                                                                                                                     //
+var _inherits2 = require("babel-runtime/helpers/inherits");                                                          //
+                                                                                                                     //
+var _inherits3 = _interopRequireDefault(_inherits2);                                                                 //
+                                                                                                                     //
+var _accounts_common = require("./accounts_common.js");                                                              // 1
+                                                                                                                     //
+function _interopRequireDefault(obj) { return obj && obj.__esModule ? obj : { "default": obj }; }                    //
+                                                                                                                     //
+/**                                                                                                                  //
+ * @summary Constructor for the `Accounts` object on the client.                                                     //
+ * @locus Client                                                                                                     //
+ * @class AccountsClient                                                                                             //
+ * @extends AccountsCommon                                                                                           //
+ * @instancename accountsClient                                                                                      //
+ * @param {Object} options an object with fields:                                                                    //
+ * @param {Object} options.connection Optional DDP connection to reuse.                                              //
+ * @param {String} options.ddpUrl Optional URL for creating a new DDP connection.                                    //
+ */                                                                                                                  //
+                                                                                                                     //
+var AccountsClient = exports.AccountsClient = function (_AccountsCommon) {                                           //
+  (0, _inherits3["default"])(AccountsClient, _AccountsCommon);                                                       //
+                                                                                                                     //
+  function AccountsClient(options) {                                                                                 // 14
+    (0, _classCallCheck3["default"])(this, AccountsClient);                                                          // 14
+                                                                                                                     //
+    var _this = (0, _possibleConstructorReturn3["default"])(this, _AccountsCommon.call(this, options));              // 14
+                                                                                                                     //
+    _this._loggingIn = false;                                                                                        // 17
+    _this._loggingInDeps = new Tracker.Dependency();                                                                 // 18
+                                                                                                                     //
+    _this._loginServicesHandle = _this.connection.subscribe("meteor.loginServiceConfiguration");                     // 20
+                                                                                                                     //
+    _this._pageLoadLoginCallbacks = [];                                                                              // 23
+    _this._pageLoadLoginAttemptInfo = null;                                                                          // 24
+                                                                                                                     //
+    // Defined in url_client.js.                                                                                     //
+    _this._initUrlMatching();                                                                                        // 27
+                                                                                                                     //
+    // Defined in localstorage_token.js.                                                                             //
+    _this._initLocalStorage();                                                                                       // 30
+    return _this;                                                                                                    // 14
+  }                                                                                                                  // 31
+                                                                                                                     //
+  ///                                                                                                                //
+  /// CURRENT USER                                                                                                   //
+  ///                                                                                                                //
+                                                                                                                     //
+  // @override                                                                                                       //
+                                                                                                                     //
+                                                                                                                     //
+  AccountsClient.prototype.userId = function () {                                                                    //
+    function userId() {                                                                                              //
+      return this.connection.userId();                                                                               // 39
+    }                                                                                                                // 40
+                                                                                                                     //
+    return userId;                                                                                                   //
+  }();                                                                                                               //
+                                                                                                                     //
+  // This is mostly just called within this file, but Meteor.loginWithPassword                                       //
+  // also uses it to make loggingIn() be true during the beginPasswordExchange                                       //
+  // method call too.                                                                                                //
+                                                                                                                     //
+                                                                                                                     //
+  AccountsClient.prototype._setLoggingIn = function () {                                                             //
+    function _setLoggingIn(x) {                                                                                      //
+      if (this._loggingIn !== x) {                                                                                   // 46
+        this._loggingIn = x;                                                                                         // 47
+        this._loggingInDeps.changed();                                                                               // 48
+      }                                                                                                              // 49
+    }                                                                                                                // 50
+                                                                                                                     //
+    return _setLoggingIn;                                                                                            //
+  }();                                                                                                               //
+                                                                                                                     //
+  /**                                                                                                                //
+   * @summary True if a login method (such as `Meteor.loginWithPassword`, `Meteor.loginWithFacebook`, or `Accounts.createUser`) is currently in progress. A reactive data source.
+   * @locus Client                                                                                                   //
+   */                                                                                                                //
+                                                                                                                     //
+                                                                                                                     //
+  AccountsClient.prototype.loggingIn = function () {                                                                 //
+    function loggingIn() {                                                                                           //
+      this._loggingInDeps.depend();                                                                                  // 57
+      return this._loggingIn;                                                                                        // 58
+    }                                                                                                                // 59
+                                                                                                                     //
+    return loggingIn;                                                                                                //
+  }();                                                                                                               //
+                                                                                                                     //
+  /**                                                                                                                //
+   * @summary Log the user out.                                                                                      //
+   * @locus Client                                                                                                   //
+   * @param {Function} [callback] Optional callback. Called with no arguments on success, or with a single `Error` argument on failure.
+   */                                                                                                                //
+                                                                                                                     //
+                                                                                                                     //
+  AccountsClient.prototype.logout = function () {                                                                    //
+    function logout(callback) {                                                                                      //
+      var self = this;                                                                                               // 67
+      self.connection.apply('logout', [], {                                                                          // 68
+        wait: true                                                                                                   // 69
+      }, function (error, result) {                                                                                  // 68
+        if (error) {                                                                                                 // 71
+          callback && callback(error);                                                                               // 72
+        } else {                                                                                                     // 73
+          self.makeClientLoggedOut();                                                                                // 74
+          callback && callback();                                                                                    // 75
+        }                                                                                                            // 76
+      });                                                                                                            // 77
+    }                                                                                                                // 78
+                                                                                                                     //
+    return logout;                                                                                                   //
+  }();                                                                                                               //
+                                                                                                                     //
+  /**                                                                                                                //
+   * @summary Log out other clients logged in as the current user, but does not log out the client that calls this function.
+   * @locus Client                                                                                                   //
+   * @param {Function} [callback] Optional callback. Called with no arguments on success, or with a single `Error` argument on failure.
+   */                                                                                                                //
+                                                                                                                     //
+                                                                                                                     //
+  AccountsClient.prototype.logoutOtherClients = function () {                                                        //
+    function logoutOtherClients(callback) {                                                                          //
+      var self = this;                                                                                               // 86
+                                                                                                                     //
+      // We need to make two method calls: one to replace our current token,                                         //
+      // and another to remove all tokens except the current one. We want to                                         //
+      // call these two methods one after the other, without any other                                               //
+      // methods running between them. For example, we don't want `logout`                                           //
+      // to be called in between our two method calls (otherwise the second                                          //
+      // method call would return an error). Another example: we don't want                                          //
+      // logout to be called before the callback for `getNewToken`;                                                  //
+      // otherwise we would momentarily log the user out and then write a                                            //
+      // new token to localStorage.                                                                                  //
+      //                                                                                                             //
+      // To accomplish this, we make both calls as wait methods, and queue                                           //
+      // them one after the other, without spinning off the event loop in                                            //
+      // between. Even though we queue `removeOtherTokens` before                                                    //
+      // `getNewToken`, we won't actually send the `removeOtherTokens` call                                          //
+      // until the `getNewToken` callback has finished running, because they                                         //
+      // are both wait methods.                                                                                      //
+      self.connection.apply('getNewToken', [], { wait: true }, function (err, result) {                              // 104
+        if (!err) {                                                                                                  // 109
+          self._storeLoginToken(self.userId(), result.token, result.tokenExpires);                                   // 110
+        }                                                                                                            // 115
+      });                                                                                                            // 116
+                                                                                                                     //
+      self.connection.apply('removeOtherTokens', [], { wait: true }, function (err) {                                // 119
+        callback && callback(err);                                                                                   // 124
+      });                                                                                                            // 125
+    }                                                                                                                // 127
+                                                                                                                     //
+    return logoutOtherClients;                                                                                       //
+  }();                                                                                                               //
+                                                                                                                     //
+  return AccountsClient;                                                                                             //
+}(_accounts_common.AccountsCommon);                                                                                  //
+                                                                                                                     //
+;                                                                                                                    // 128
+                                                                                                                     //
+var Ap = AccountsClient.prototype;                                                                                   // 130
+                                                                                                                     //
+/**                                                                                                                  //
+ * @summary True if a login method (such as `Meteor.loginWithPassword`, `Meteor.loginWithFacebook`, or `Accounts.createUser`) is currently in progress. A reactive data source.
+ * @locus Client                                                                                                     //
+ * @importFromPackage meteor                                                                                         //
+ */                                                                                                                  //
+Meteor.loggingIn = function () {                                                                                     // 137
+  return Accounts.loggingIn();                                                                                       // 138
+};                                                                                                                   // 139
+                                                                                                                     //
+///                                                                                                                  //
+/// LOGIN METHODS                                                                                                    //
+///                                                                                                                  //
+                                                                                                                     //
+// Call a login method on the server.                                                                                //
+//                                                                                                                   //
+// A login method is a method which on success calls `this.setUserId(id)` and                                        //
+// `Accounts._setLoginToken` on the server and returns an object with fields                                         //
+// 'id' (containing the user id), 'token' (containing a resume token), and                                           //
+// optionally `tokenExpires`.                                                                                        //
+//                                                                                                                   //
+// This function takes care of:                                                                                      //
+//   - Updating the Meteor.loggingIn() reactive data source                                                          //
+//   - Calling the method in 'wait' mode                                                                             //
+//   - On success, saving the resume token to localStorage                                                           //
+//   - On success, calling Accounts.connection.setUserId()                                                           //
+//   - Setting up an onReconnect handler which logs in with                                                          //
+//     the resume token                                                                                              //
+//                                                                                                                   //
+// Options:                                                                                                          //
+// - methodName: The method to call (default 'login')                                                                //
+// - methodArguments: The arguments for the method                                                                   //
+// - validateResult: If provided, will be called with the result of the                                              //
+//                 method. If it throws, the client will not be logged in (and                                       //
+//                 its error will be passed to the callback).                                                        //
+// - userCallback: Will be called with no arguments once the user is fully                                           //
+//                 logged in, or with the error on error.                                                            //
+//                                                                                                                   //
+Ap.callLoginMethod = function (options) {                                                                            // 169
+  var self = this;                                                                                                   // 170
+                                                                                                                     //
+  options = _.extend({                                                                                               // 172
+    methodName: 'login',                                                                                             // 173
+    methodArguments: [{}],                                                                                           // 174
+    _suppressLoggingIn: false                                                                                        // 175
+  }, options);                                                                                                       // 172
+                                                                                                                     //
+  // Set defaults for callback arguments to no-op functions; make sure we                                            //
+  // override falsey values too.                                                                                     //
+  _.each(['validateResult', 'userCallback'], function (f) {                                                          // 180
+    if (!options[f]) options[f] = function () {};                                                                    // 181
+  });                                                                                                                // 183
+                                                                                                                     //
+  // Prepare callbacks: user provided and onLogin/onLoginFailure hooks.                                              //
+  var loginCallbacks = _.once(function (error) {                                                                     // 186
+    if (!error) {                                                                                                    // 187
+      self._onLoginHook.each(function (callback) {                                                                   // 188
+        callback();                                                                                                  // 189
+        return true;                                                                                                 // 190
+      });                                                                                                            // 191
+    } else {                                                                                                         // 192
+      self._onLoginFailureHook.each(function (callback) {                                                            // 193
+        callback();                                                                                                  // 194
+        return true;                                                                                                 // 195
+      });                                                                                                            // 196
+    }                                                                                                                // 197
+    options.userCallback.apply(this, arguments);                                                                     // 198
+  });                                                                                                                // 199
+                                                                                                                     //
+  var reconnected = false;                                                                                           // 201
+                                                                                                                     //
+  // We want to set up onReconnect as soon as we get a result token back from                                        //
+  // the server, without having to wait for subscriptions to rerun. This is                                          //
+  // because if we disconnect and reconnect between getting the result and                                           //
+  // getting the results of subscription rerun, we WILL NOT re-send this                                             //
+  // method (because we never re-send methods whose results we've received)                                          //
+  // but we WILL call loggedInAndDataReadyCallback at "reconnect quiesce"                                            //
+  // time. This will lead to makeClientLoggedIn(result.id) even though we                                            //
+  // haven't actually sent a login method!                                                                           //
+  //                                                                                                                 //
+  // But by making sure that we send this "resume" login in that case (and                                           //
+  // calling makeClientLoggedOut if it fails), we'll end up with an accurate                                         //
+  // client-side userId. (It's important that livedata_connection guarantees                                         //
+  // that the "reconnect quiesce"-time call to loggedInAndDataReadyCallback                                          //
+  // will occur before the callback from the resume login call.)                                                     //
+  var onResultReceived = function onResultReceived(err, result) {                                                    // 217
+    if (err || !result || !result.token) {                                                                           // 218
+      // Leave onReconnect alone if there was an error, so that if the user was                                      //
+      // already logged in they will still get logged in on reconnect.                                               //
+      // See issue #4970.                                                                                            //
+    } else {                                                                                                         // 222
+        self.connection.onReconnect = function () {                                                                  // 223
+          reconnected = true;                                                                                        // 224
+          // If our token was updated in storage, use the latest one.                                                //
+          var storedToken = self._storedLoginToken();                                                                // 226
+          if (storedToken) {                                                                                         // 227
+            result = {                                                                                               // 228
+              token: storedToken,                                                                                    // 229
+              tokenExpires: self._storedLoginTokenExpires()                                                          // 230
+            };                                                                                                       // 228
+          }                                                                                                          // 232
+          if (!result.tokenExpires) result.tokenExpires = self._tokenExpiration(new Date());                         // 233
+          if (self._tokenExpiresSoon(result.tokenExpires)) {                                                         // 235
+            self.makeClientLoggedOut();                                                                              // 236
+          } else {                                                                                                   // 237
+            self.callLoginMethod({                                                                                   // 238
+              methodArguments: [{ resume: result.token }],                                                           // 239
+              // Reconnect quiescence ensures that the user doesn't see an                                           //
+              // intermediate state before the login method finishes. So we don't                                    //
+              // need to show a logging-in animation.                                                                //
+              _suppressLoggingIn: true,                                                                              // 243
+              userCallback: function () {                                                                            // 244
+                function userCallback(error) {                                                                       // 244
+                  var storedTokenNow = self._storedLoginToken();                                                     // 245
+                  if (error) {                                                                                       // 246
+                    // If we had a login error AND the current stored token is the                                   //
+                    // one that we tried to log in with, then declare ourselves                                      //
+                    // logged out. If there's a token in storage but it's not the                                    //
+                    // token that we tried to log in with, we don't know anything                                    //
+                    // about whether that token is valid or not, so do nothing. The                                  //
+                    // periodic localStorage poll will decide if we are logged in or                                 //
+                    // out with this token, if it hasn't already. Of course, even                                    //
+                    // with this check, another tab could insert a new valid token                                   //
+                    // immediately before we clear localStorage here, which would                                    //
+                    // lead to both tabs being logged out, but by checking the token                                 //
+                    // in storage right now we hope to make that unlikely to happen.                                 //
+                    //                                                                                               //
+                    // If there is no token in storage right now, we don't have to                                   //
+                    // do anything; whatever code removed the token from storage was                                 //
+                    // responsible for calling `makeClientLoggedOut()`, or the                                       //
+                    // periodic localStorage poll will call `makeClientLoggedOut`                                    //
+                    // eventually if another tab wiped the token from storage.                                       //
+                    if (storedTokenNow && storedTokenNow === result.token) {                                         // 264
+                      self.makeClientLoggedOut();                                                                    // 265
+                    }                                                                                                // 266
+                  }                                                                                                  // 267
+                  // Possibly a weird callback to call, but better than nothing if                                   //
+                  // there is a reconnect between "login result received" and "data                                  //
+                  // ready".                                                                                         //
+                  loginCallbacks(error);                                                                             // 271
+                }                                                                                                    // 272
+                                                                                                                     //
+                return userCallback;                                                                                 // 244
+              }() });                                                                                                // 244
+          }                                                                                                          // 273
+        };                                                                                                           // 274
+      }                                                                                                              // 275
+  };                                                                                                                 // 276
+                                                                                                                     //
+  // This callback is called once the local cache of the current-user                                                //
+  // subscription (and all subscriptions, in fact) are guaranteed to be up to                                        //
+  // date.                                                                                                           //
+  var loggedInAndDataReadyCallback = function loggedInAndDataReadyCallback(error, result) {                          // 281
+    // If the login method returns its result but the connection is lost                                             //
+    // before the data is in the local cache, it'll set an onReconnect (see                                          //
+    // above). The onReconnect will try to log in using the token, and *it*                                          //
+    // will call userCallback via its own version of this                                                            //
+    // loggedInAndDataReadyCallback. So we don't have to do anything here.                                           //
+    if (reconnected) return;                                                                                         // 287
+                                                                                                                     //
+    // Note that we need to call this even if _suppressLoggingIn is true,                                            //
+    // because it could be matching a _setLoggingIn(true) from a                                                     //
+    // half-completed pre-reconnect login method.                                                                    //
+    self._setLoggingIn(false);                                                                                       // 293
+    if (error || !result) {                                                                                          // 294
+      error = error || new Error("No result from call to " + options.methodName);                                    // 295
+      loginCallbacks(error);                                                                                         // 297
+      return;                                                                                                        // 298
+    }                                                                                                                // 299
+    try {                                                                                                            // 300
+      options.validateResult(result);                                                                                // 301
+    } catch (e) {                                                                                                    // 302
+      loginCallbacks(e);                                                                                             // 303
+      return;                                                                                                        // 304
+    }                                                                                                                // 305
+                                                                                                                     //
+    // Make the client logged in. (The user data should already be loaded!)                                          //
+    self.makeClientLoggedIn(result.id, result.token, result.tokenExpires);                                           // 308
+    loginCallbacks();                                                                                                // 309
+  };                                                                                                                 // 310
+                                                                                                                     //
+  if (!options._suppressLoggingIn) self._setLoggingIn(true);                                                         // 312
+  self.connection.apply(options.methodName, options.methodArguments, { wait: true, onResultReceived: onResultReceived }, loggedInAndDataReadyCallback);
+};                                                                                                                   // 319
+                                                                                                                     //
+Ap.makeClientLoggedOut = function () {                                                                               // 321
+  // Ensure client was successfully logged in before running logout hooks.                                           //
+  if (this.connection._userId) {                                                                                     // 323
+    this._onLogoutHook.each(function (callback) {                                                                    // 324
+      callback();                                                                                                    // 325
+      return true;                                                                                                   // 326
+    });                                                                                                              // 327
+  }                                                                                                                  // 328
+  this._unstoreLoginToken();                                                                                         // 329
+  this.connection.setUserId(null);                                                                                   // 330
+  this.connection.onReconnect = null;                                                                                // 331
+};                                                                                                                   // 332
+                                                                                                                     //
+Ap.makeClientLoggedIn = function (userId, token, tokenExpires) {                                                     // 334
+  this._storeLoginToken(userId, token, tokenExpires);                                                                // 335
+  this.connection.setUserId(userId);                                                                                 // 336
+};                                                                                                                   // 337
+                                                                                                                     //
+/**                                                                                                                  //
+ * @summary Log the user out.                                                                                        //
+ * @locus Client                                                                                                     //
+ * @param {Function} [callback] Optional callback. Called with no arguments on success, or with a single `Error` argument on failure.
+ * @importFromPackage meteor                                                                                         //
+ */                                                                                                                  //
+Meteor.logout = function (callback) {                                                                                // 345
+  return Accounts.logout(callback);                                                                                  // 346
+};                                                                                                                   // 347
+                                                                                                                     //
+/**                                                                                                                  //
+ * @summary Log out other clients logged in as the current user, but does not log out the client that calls this function.
+ * @locus Client                                                                                                     //
+ * @param {Function} [callback] Optional callback. Called with no arguments on success, or with a single `Error` argument on failure.
+ * @importFromPackage meteor                                                                                         //
+ */                                                                                                                  //
+Meteor.logoutOtherClients = function (callback) {                                                                    // 355
+  return Accounts.logoutOtherClients(callback);                                                                      // 356
+};                                                                                                                   // 357
+                                                                                                                     //
+///                                                                                                                  //
+/// LOGIN SERVICES                                                                                                   //
+///                                                                                                                  //
+                                                                                                                     //
+// A reactive function returning whether the loginServiceConfiguration                                               //
+// subscription is ready. Used by accounts-ui to hide the login button                                               //
+// until we have all the configuration loaded                                                                        //
+//                                                                                                                   //
+Ap.loginServicesConfigured = function () {                                                                           // 368
+  return this._loginServicesHandle.ready();                                                                          // 369
+};                                                                                                                   // 370
+                                                                                                                     //
+// Some login services such as the redirect login flow or the resume                                                 //
+// login handler can log the user in at page load time.  The                                                         //
+// Meteor.loginWithX functions have a callback argument, but the                                                     //
+// callback function instance won't be in memory any longer if the                                                   //
+// page was reloaded.  The `onPageLoadLogin` function allows a                                                       //
+// callback to be registered for the case where the login was                                                        //
+// initiated in a previous VM, and we now have the result of the login                                               //
+// attempt in a new VM.                                                                                              //
+                                                                                                                     //
+// Register a callback to be called if we have information about a                                                   //
+// login attempt at page load time.  Call the callback immediately if                                                //
+// we already have the page load login attempt info, otherwise stash                                                 //
+// the callback to be called if and when we do get the attempt info.                                                 //
+//                                                                                                                   //
+Ap.onPageLoadLogin = function (f) {                                                                                  // 387
+  if (this._pageLoadLoginAttemptInfo) {                                                                              // 388
+    f(this._pageLoadLoginAttemptInfo);                                                                               // 389
+  } else {                                                                                                           // 390
+    this._pageLoadLoginCallbacks.push(f);                                                                            // 391
+  }                                                                                                                  // 392
+};                                                                                                                   // 393
+                                                                                                                     //
+// Receive the information about the login attempt at page load time.                                                //
+// Call registered callbacks, and also record the info in case                                                       //
+// someone's callback hasn't been registered yet.                                                                    //
+//                                                                                                                   //
+Ap._pageLoadLogin = function (attemptInfo) {                                                                         // 400
+  if (this._pageLoadLoginAttemptInfo) {                                                                              // 401
+    Meteor._debug("Ignoring unexpected duplicate page load login attempt info");                                     // 402
+    return;                                                                                                          // 403
+  }                                                                                                                  // 404
+                                                                                                                     //
+  _.each(this._pageLoadLoginCallbacks, function (callback) {                                                         // 406
+    callback(attemptInfo);                                                                                           // 407
+  });                                                                                                                // 408
+                                                                                                                     //
+  this._pageLoadLoginCallbacks = [];                                                                                 // 410
+  this._pageLoadLoginAttemptInfo = attemptInfo;                                                                      // 411
+};                                                                                                                   // 412
+                                                                                                                     //
+///                                                                                                                  //
+/// HANDLEBARS HELPERS                                                                                               //
+///                                                                                                                  //
+                                                                                                                     //
+// If our app has a Blaze, register the {{currentUser}} and {{loggingIn}}                                            //
+// global helpers.                                                                                                   //
+if (Package.blaze) {                                                                                                 // 421
+  /**                                                                                                                //
+   * @global                                                                                                         //
+   * @name  currentUser                                                                                              //
+   * @isHelper true                                                                                                  //
+   * @summary Calls [Meteor.user()](#meteor_user). Use `{{#if currentUser}}` to check whether the user is logged in.
+   */                                                                                                                //
+  Package.blaze.Blaze.Template.registerHelper('currentUser', function () {                                           // 428
+    return Meteor.user();                                                                                            // 429
+  });                                                                                                                // 430
+                                                                                                                     //
+  /**                                                                                                                //
+   * @global                                                                                                         //
+   * @name  loggingIn                                                                                                //
+   * @isHelper true                                                                                                  //
+   * @summary Calls [Meteor.loggingIn()](#meteor_loggingin).                                                         //
+   */                                                                                                                //
+  Package.blaze.Blaze.Template.registerHelper('loggingIn', function () {                                             // 438
+    return Meteor.loggingIn();                                                                                       // 439
+  });                                                                                                                // 440
+}                                                                                                                    // 441
+///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+
+}],"accounts_common.js":["babel-runtime/helpers/classCallCheck",function(require,exports){
+
+///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+//                                                                                                                   //
+// packages/accounts-base/accounts_common.js                                                                         //
+//                                                                                                                   //
+///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+                                                                                                                     //
+exports.__esModule = true;                                                                                           //
+exports.AccountsCommon = undefined;                                                                                  //
+                                                                                                                     //
+var _classCallCheck2 = require("babel-runtime/helpers/classCallCheck");                                              //
+                                                                                                                     //
+var _classCallCheck3 = _interopRequireDefault(_classCallCheck2);                                                     //
+                                                                                                                     //
+function _interopRequireDefault(obj) { return obj && obj.__esModule ? obj : { "default": obj }; }                    //
+                                                                                                                     //
+/**                                                                                                                  //
+ * @summary Super-constructor for AccountsClient and AccountsServer.                                                 //
+ * @locus Anywhere                                                                                                   //
+ * @class AccountsCommon                                                                                             //
+ * @instancename accountsClientOrServer                                                                              //
+ * @param options {Object} an object with fields:                                                                    //
+ * - connection {Object} Optional DDP connection to reuse.                                                           //
+ * - ddpUrl {String} Optional URL for creating a new DDP connection.                                                 //
+ */                                                                                                                  //
+                                                                                                                     //
+var AccountsCommon = exports.AccountsCommon = function () {                                                          //
+  function AccountsCommon(options) {                                                                                 // 11
+    (0, _classCallCheck3["default"])(this, AccountsCommon);                                                          // 11
+                                                                                                                     //
+    // Currently this is read directly by packages like accounts-password                                            //
+    // and accounts-ui-unstyled.                                                                                     //
+    this._options = {};                                                                                              // 14
+                                                                                                                     //
+    // Note that setting this.connection = null causes this.users to be a                                            //
+    // LocalCollection, which is not what we want.                                                                   //
+    this.connection = undefined;                                                                                     // 18
+    this._initConnection(options || {});                                                                             // 19
+                                                                                                                     //
+    // There is an allow call in accounts_server.js that restricts writes to                                         //
+    // this collection.                                                                                              //
+    this.users = new Mongo.Collection("users", {                                                                     // 23
+      _preventAutopublish: true,                                                                                     // 24
+      connection: this.connection                                                                                    // 25
+    });                                                                                                              // 23
+                                                                                                                     //
+    // Callback exceptions are printed with Meteor._debug and ignored.                                               //
+    this._onLoginHook = new Hook({                                                                                   // 29
+      bindEnvironment: false,                                                                                        // 30
+      debugPrintExceptions: "onLogin callback"                                                                       // 31
+    });                                                                                                              // 29
+                                                                                                                     //
+    this._onLoginFailureHook = new Hook({                                                                            // 34
+      bindEnvironment: false,                                                                                        // 35
+      debugPrintExceptions: "onLoginFailure callback"                                                                // 36
+    });                                                                                                              // 34
+                                                                                                                     //
+    this._onLogoutHook = new Hook({                                                                                  // 39
+      bindEnvironment: false,                                                                                        // 40
+      debugPrintExceptions: "onLogout callback"                                                                      // 41
+    });                                                                                                              // 39
+  }                                                                                                                  // 43
+                                                                                                                     //
+  /**                                                                                                                //
+   * @summary Get the current user id, or `null` if no user is logged in. A reactive data source.                    //
+   * @locus Anywhere but publish functions                                                                           //
+   */                                                                                                                //
+                                                                                                                     //
+                                                                                                                     //
+  AccountsCommon.prototype.userId = function () {                                                                    //
+    function userId() {                                                                                              //
+      throw new Error("userId method not implemented");                                                              // 50
+    }                                                                                                                // 51
+                                                                                                                     //
+    return userId;                                                                                                   //
+  }();                                                                                                               //
+                                                                                                                     //
+  /**                                                                                                                //
+   * @summary Get the current user record, or `null` if no user is logged in. A reactive data source.                //
+   * @locus Anywhere but publish functions                                                                           //
+   */                                                                                                                //
+                                                                                                                     //
+                                                                                                                     //
+  AccountsCommon.prototype.user = function () {                                                                      //
+    function user() {                                                                                                //
+      var userId = this.userId();                                                                                    // 58
+      return userId ? this.users.findOne(userId) : null;                                                             // 59
+    }                                                                                                                // 60
+                                                                                                                     //
+    return user;                                                                                                     //
+  }();                                                                                                               //
+                                                                                                                     //
+  // Set up config for the accounts system. Call this on both the client                                             //
+  // and the server.                                                                                                 //
+  //                                                                                                                 //
+  // Note that this method gets overridden on AccountsServer.prototype, but                                          //
+  // the overriding method calls the overridden method.                                                              //
+  //                                                                                                                 //
+  // XXX we should add some enforcement that this is called on both the                                              //
+  // client and the server. Otherwise, a user can                                                                    //
+  // 'forbidClientAccountCreation' only on the client and while it looks                                             //
+  // like their app is secure, the server will still accept createUser                                               //
+  // calls. https://github.com/meteor/meteor/issues/828                                                              //
+  //                                                                                                                 //
+  // @param options {Object} an object with fields:                                                                  //
+  // - sendVerificationEmail {Boolean}                                                                               //
+  //     Send email address verification emails to new users created from                                            //
+  //     client signups.                                                                                             //
+  // - forbidClientAccountCreation {Boolean}                                                                         //
+  //     Do not allow clients to create accounts directly.                                                           //
+  // - restrictCreationByEmailDomain {Function or String}                                                            //
+  //     Require created users to have an email matching the function or                                             //
+  //     having the string as domain.                                                                                //
+  // - loginExpirationInDays {Number}                                                                                //
+  //     Number of days since login until a user is logged out (login token                                          //
+  //     expires).                                                                                                   //
+                                                                                                                     //
+  /**                                                                                                                //
+   * @summary Set global accounts options.                                                                           //
+   * @locus Anywhere                                                                                                 //
+   * @param {Object} options                                                                                         //
+   * @param {Boolean} options.sendVerificationEmail New users with an email address will receive an address verification email.
+   * @param {Boolean} options.forbidClientAccountCreation Calls to [`createUser`](#accounts_createuser) from the client will be rejected. In addition, if you are using [accounts-ui](#accountsui), the "Create account" link will not be available.
+   * @param {String | Function} options.restrictCreationByEmailDomain If set to a string, only allows new users if the domain part of their email address matches the string. If set to a function, only allows new users if the function returns true.  The function is passed the full email address of the proposed new user.  Works with password-based sign-in and external services that expose email addresses (Google, Facebook, GitHub). All existing users still can log in after enabling this option. Example: `Accounts.config({ restrictCreationByEmailDomain: 'school.edu' })`.
+   * @param {Number} options.loginExpirationInDays The number of days from when a user logs in until their token expires and they are logged out. Defaults to 90. Set to `null` to disable login expiration.
+   * @param {String} options.oauthSecretKey When using the `oauth-encryption` package, the 16 byte key using to encrypt sensitive account credentials in the database, encoded in base64.  This option may only be specifed on the server.  See packages/oauth-encryption/README.md for details.
+   */                                                                                                                //
+                                                                                                                     //
+                                                                                                                     //
+  AccountsCommon.prototype.config = function () {                                                                    //
+    function config(options) {                                                                                       //
+      var self = this;                                                                                               // 98
+                                                                                                                     //
+      // We don't want users to accidentally only call Accounts.config on the                                        //
+      // client, where some of the options will have partial effects (eg removing                                    //
+      // the "create account" button from accounts-ui if forbidClientAccountCreation                                 //
+      // is set, or redirecting Google login to a specific-domain page) without                                      //
+      // having their full effects.                                                                                  //
+      if (Meteor.isServer) {                                                                                         // 105
+        __meteor_runtime_config__.accountsConfigCalled = true;                                                       // 106
+      } else if (!__meteor_runtime_config__.accountsConfigCalled) {                                                  // 107
+        // XXX would be nice to "crash" the client and replace the UI with an error                                  //
+        // message, but there's no trivial way to do this.                                                           //
+        Meteor._debug("Accounts.config was called on the client but not on the " + "server; some configuration options may not take effect.");
+      }                                                                                                              // 112
+                                                                                                                     //
+      // We need to validate the oauthSecretKey option at the time                                                   //
+      // Accounts.config is called. We also deliberately don't store the                                             //
+      // oauthSecretKey in Accounts._options.                                                                        //
+      if (_.has(options, "oauthSecretKey")) {                                                                        // 117
+        if (Meteor.isClient) throw new Error("The oauthSecretKey option may only be specified on the server");       // 118
+        if (!Package["oauth-encryption"]) throw new Error("The oauth-encryption package must be loaded to set oauthSecretKey");
+        Package["oauth-encryption"].OAuthEncryption.loadKey(options.oauthSecretKey);                                 // 122
+        options = _.omit(options, "oauthSecretKey");                                                                 // 123
+      }                                                                                                              // 124
+                                                                                                                     //
+      // validate option keys                                                                                        //
+      var VALID_KEYS = ["sendVerificationEmail", "forbidClientAccountCreation", "restrictCreationByEmailDomain", "loginExpirationInDays"];
+      _.each(_.keys(options), function (key) {                                                                       // 129
+        if (!_.contains(VALID_KEYS, key)) {                                                                          // 130
+          throw new Error("Accounts.config: Invalid key: " + key);                                                   // 131
+        }                                                                                                            // 132
+      });                                                                                                            // 133
+                                                                                                                     //
+      // set values in Accounts._options                                                                             //
+      _.each(VALID_KEYS, function (key) {                                                                            // 136
+        if (key in options) {                                                                                        // 137
+          if (key in self._options) {                                                                                // 138
+            throw new Error("Can't set `" + key + "` more than once");                                               // 139
+          }                                                                                                          // 140
+          self._options[key] = options[key];                                                                         // 141
+        }                                                                                                            // 142
+      });                                                                                                            // 143
+    }                                                                                                                // 144
+                                                                                                                     //
+    return config;                                                                                                   //
+  }();                                                                                                               //
+                                                                                                                     //
+  /**                                                                                                                //
+   * @summary Register a callback to be called after a login attempt succeeds.                                       //
+   * @locus Anywhere                                                                                                 //
+   * @param {Function} func The callback to be called when login is successful.                                      //
+   */                                                                                                                //
+                                                                                                                     //
+                                                                                                                     //
+  AccountsCommon.prototype.onLogin = function () {                                                                   //
+    function onLogin(func) {                                                                                         //
+      return this._onLoginHook.register(func);                                                                       // 152
+    }                                                                                                                // 153
+                                                                                                                     //
+    return onLogin;                                                                                                  //
+  }();                                                                                                               //
+                                                                                                                     //
+  /**                                                                                                                //
+   * @summary Register a callback to be called after a login attempt fails.                                          //
+   * @locus Anywhere                                                                                                 //
+   * @param {Function} func The callback to be called after the login has failed.                                    //
+   */                                                                                                                //
+                                                                                                                     //
+                                                                                                                     //
+  AccountsCommon.prototype.onLoginFailure = function () {                                                            //
+    function onLoginFailure(func) {                                                                                  //
+      return this._onLoginFailureHook.register(func);                                                                // 161
+    }                                                                                                                // 162
+                                                                                                                     //
+    return onLoginFailure;                                                                                           //
+  }();                                                                                                               //
+                                                                                                                     //
+  /**                                                                                                                //
+   * @summary Register a callback to be called after a logout attempt succeeds.                                      //
+   * @locus Anywhere                                                                                                 //
+   * @param {Function} func The callback to be called when logout is successful.                                     //
+   */                                                                                                                //
+                                                                                                                     //
+                                                                                                                     //
+  AccountsCommon.prototype.onLogout = function () {                                                                  //
+    function onLogout(func) {                                                                                        //
+      return this._onLogoutHook.register(func);                                                                      // 170
+    }                                                                                                                // 171
+                                                                                                                     //
+    return onLogout;                                                                                                 //
+  }();                                                                                                               //
+                                                                                                                     //
+  AccountsCommon.prototype._initConnection = function () {                                                           //
+    function _initConnection(options) {                                                                              //
+      if (!Meteor.isClient) {                                                                                        // 174
+        return;                                                                                                      // 175
+      }                                                                                                              // 176
+                                                                                                                     //
+      // The connection used by the Accounts system. This is the connection                                          //
+      // that will get logged in by Meteor.login(), and this is the                                                  //
+      // connection whose login state will be reflected by Meteor.userId().                                          //
+      //                                                                                                             //
+      // It would be much preferable for this to be in accounts_client.js,                                           //
+      // but it has to be here because it's needed to create the                                                     //
+      // Meteor.users collection.                                                                                    //
+                                                                                                                     //
+      if (options.connection) {                                                                                      // 186
+        this.connection = options.connection;                                                                        // 187
+      } else if (options.ddpUrl) {                                                                                   // 188
+        this.connection = DDP.connect(options.ddpUrl);                                                               // 189
+      } else if (typeof __meteor_runtime_config__ !== "undefined" && __meteor_runtime_config__.ACCOUNTS_CONNECTION_URL) {
+        // Temporary, internal hook to allow the server to point the client                                          //
+        // to a different authentication server. This is for a very                                                  //
+        // particular use case that comes up when implementing a oauth                                               //
+        // server. Unsupported and may go away at any point in time.                                                 //
+        //                                                                                                           //
+        // We will eventually provide a general way to use account-base                                              //
+        // against any DDP connection, not just one special one.                                                     //
+        this.connection = DDP.connect(__meteor_runtime_config__.ACCOUNTS_CONNECTION_URL);                            // 199
+      } else {                                                                                                       // 201
+        this.connection = Meteor.connection;                                                                         // 202
+      }                                                                                                              // 203
+    }                                                                                                                // 204
+                                                                                                                     //
+    return _initConnection;                                                                                          //
+  }();                                                                                                               //
+                                                                                                                     //
+  AccountsCommon.prototype._getTokenLifetimeMs = function () {                                                       //
+    function _getTokenLifetimeMs() {                                                                                 //
+      return (this._options.loginExpirationInDays || DEFAULT_LOGIN_EXPIRATION_DAYS) * 24 * 60 * 60 * 1000;           // 207
+    }                                                                                                                // 209
+                                                                                                                     //
+    return _getTokenLifetimeMs;                                                                                      //
+  }();                                                                                                               //
+                                                                                                                     //
+  AccountsCommon.prototype._tokenExpiration = function () {                                                          //
+    function _tokenExpiration(when) {                                                                                //
+      // We pass when through the Date constructor for backwards compatibility;                                      //
+      // `when` used to be a number.                                                                                 //
+      return new Date(new Date(when).getTime() + this._getTokenLifetimeMs());                                        // 214
+    }                                                                                                                // 215
+                                                                                                                     //
+    return _tokenExpiration;                                                                                         //
+  }();                                                                                                               //
+                                                                                                                     //
+  AccountsCommon.prototype._tokenExpiresSoon = function () {                                                         //
+    function _tokenExpiresSoon(when) {                                                                               //
+      var minLifetimeMs = .1 * this._getTokenLifetimeMs();                                                           // 218
+      var minLifetimeCapMs = MIN_TOKEN_LIFETIME_CAP_SECS * 1000;                                                     // 219
+      if (minLifetimeMs > minLifetimeCapMs) minLifetimeMs = minLifetimeCapMs;                                        // 220
+      return new Date() > new Date(when) - minLifetimeMs;                                                            // 222
+    }                                                                                                                // 223
+                                                                                                                     //
+    return _tokenExpiresSoon;                                                                                        //
+  }();                                                                                                               //
+                                                                                                                     //
+  return AccountsCommon;                                                                                             //
+}();                                                                                                                 //
+                                                                                                                     //
+var Ap = AccountsCommon.prototype;                                                                                   // 226
+                                                                                                                     //
+// Note that Accounts is defined separately in accounts_client.js and                                                //
+// accounts_server.js.                                                                                               //
+                                                                                                                     //
+/**                                                                                                                  //
+ * @summary Get the current user id, or `null` if no user is logged in. A reactive data source.                      //
+ * @locus Anywhere but publish functions                                                                             //
+ * @importFromPackage meteor                                                                                         //
+ */                                                                                                                  //
+Meteor.userId = function () {                                                                                        // 236
+  return Accounts.userId();                                                                                          // 237
+};                                                                                                                   // 238
+                                                                                                                     //
+/**                                                                                                                  //
+ * @summary Get the current user record, or `null` if no user is logged in. A reactive data source.                  //
+ * @locus Anywhere but publish functions                                                                             //
+ * @importFromPackage meteor                                                                                         //
+ */                                                                                                                  //
+Meteor.user = function () {                                                                                          // 245
+  return Accounts.user();                                                                                            // 246
+};                                                                                                                   // 247
+                                                                                                                     //
+// how long (in days) until a login token expires                                                                    //
+var DEFAULT_LOGIN_EXPIRATION_DAYS = 90;                                                                              // 250
+// Clients don't try to auto-login with a token that is going to expire within                                       //
+// .1 * DEFAULT_LOGIN_EXPIRATION_DAYS, capped at MIN_TOKEN_LIFETIME_CAP_SECS.                                        //
+// Tries to avoid abrupt disconnects from expiring tokens.                                                           //
+var MIN_TOKEN_LIFETIME_CAP_SECS = 3600; // one hour                                                                  // 254
+// how often (in milliseconds) we check for expired tokens                                                           //
+EXPIRE_TOKENS_INTERVAL_MS = 600 * 1000; // 10 minutes                                                                // 256
+// how long we wait before logging out clients when Meteor.logoutOtherClients is                                     //
+// called                                                                                                            //
+CONNECTION_CLOSE_DELAY_MS = 10 * 1000;                                                                               // 259
+                                                                                                                     //
+// loginServiceConfiguration and ConfigError are maintained for backwards compatibility                              //
+Meteor.startup(function () {                                                                                         // 262
+  var ServiceConfiguration = Package['service-configuration'].ServiceConfiguration;                                  // 263
+  Ap.loginServiceConfiguration = ServiceConfiguration.configurations;                                                // 265
+  Ap.ConfigError = ServiceConfiguration.ConfigError;                                                                 // 266
+});                                                                                                                  // 267
+                                                                                                                     //
+// Thrown when the user cancels the login process (eg, closes an oauth                                               //
+// popup, declines retina scan, etc)                                                                                 //
+var lceName = 'Accounts.LoginCancelledError';                                                                        // 271
+Ap.LoginCancelledError = Meteor.makeErrorType(lceName, function (description) {                                      // 272
+  this.message = description;                                                                                        // 275
+});                                                                                                                  // 276
+Ap.LoginCancelledError.prototype.name = lceName;                                                                     // 278
+                                                                                                                     //
+// This is used to transmit specific subclass errors over the wire. We should                                        //
+// come up with a more generic way to do this (eg, with some sort of symbolic                                        //
+// error code rather than a number).                                                                                 //
+Ap.LoginCancelledError.numericError = 0x8acdc2f;                                                                     // 283
+///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+
+}],"localstorage_token.js":["./accounts_client.js",function(require){
+
+///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+//                                                                                                                   //
+// packages/accounts-base/localstorage_token.js                                                                      //
+//                                                                                                                   //
+///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+                                                                                                                     //
+var _accounts_client = require("./accounts_client.js");                                                              // 1
+                                                                                                                     //
+var Ap = _accounts_client.AccountsClient.prototype;                                                                  // 2
+                                                                                                                     //
+// This file deals with storing a login token and user id in the                                                     //
+// browser's localStorage facility. It polls local storage every few                                                 //
+// seconds to synchronize login state between multiple tabs in the same                                              //
+// browser.                                                                                                          //
+                                                                                                                     //
+// Login with a Meteor access token. This is the only public function                                                //
+// here.                                                                                                             //
+Meteor.loginWithToken = function (token, callback) {                                                                 // 11
+  return Accounts.loginWithToken(token, callback);                                                                   // 12
+};                                                                                                                   // 13
+                                                                                                                     //
+Ap.loginWithToken = function (token, callback) {                                                                     // 15
+  this.callLoginMethod({                                                                                             // 16
+    methodArguments: [{                                                                                              // 17
+      resume: token                                                                                                  // 18
+    }],                                                                                                              // 17
+    userCallback: callback                                                                                           // 20
+  });                                                                                                                // 16
+};                                                                                                                   // 22
+                                                                                                                     //
+// Semi-internal API. Call this function to re-enable auto login after                                               //
+// if it was disabled at startup.                                                                                    //
+Ap._enableAutoLogin = function () {                                                                                  // 26
+  this._autoLoginEnabled = true;                                                                                     // 27
+  this._pollStoredLoginToken();                                                                                      // 28
+};                                                                                                                   // 29
+                                                                                                                     //
+///                                                                                                                  //
+/// STORING                                                                                                          //
+///                                                                                                                  //
+                                                                                                                     //
+// Call this from the top level of the test file for any test that does                                              //
+// logging in and out, to protect multiple tabs running the same tests                                               //
+// simultaneously from interfering with each others' localStorage.                                                   //
+Ap._isolateLoginTokenForTest = function () {                                                                         // 39
+  this.LOGIN_TOKEN_KEY = this.LOGIN_TOKEN_KEY + Random.id();                                                         // 40
+  this.USER_ID_KEY = this.USER_ID_KEY + Random.id();                                                                 // 41
+};                                                                                                                   // 42
+                                                                                                                     //
+Ap._storeLoginToken = function (userId, token, tokenExpires) {                                                       // 44
+  Meteor._localStorage.setItem(this.USER_ID_KEY, userId);                                                            // 45
+  Meteor._localStorage.setItem(this.LOGIN_TOKEN_KEY, token);                                                         // 46
+  if (!tokenExpires) tokenExpires = this._tokenExpiration(new Date());                                               // 47
+  Meteor._localStorage.setItem(this.LOGIN_TOKEN_EXPIRES_KEY, tokenExpires);                                          // 49
+                                                                                                                     //
+  // to ensure that the localstorage poller doesn't end up trying to                                                 //
+  // connect a second time                                                                                           //
+  this._lastLoginTokenWhenPolled = token;                                                                            // 53
+};                                                                                                                   // 54
+                                                                                                                     //
+Ap._unstoreLoginToken = function () {                                                                                // 56
+  Meteor._localStorage.removeItem(this.USER_ID_KEY);                                                                 // 57
+  Meteor._localStorage.removeItem(this.LOGIN_TOKEN_KEY);                                                             // 58
+  Meteor._localStorage.removeItem(this.LOGIN_TOKEN_EXPIRES_KEY);                                                     // 59
+                                                                                                                     //
+  // to ensure that the localstorage poller doesn't end up trying to                                                 //
+  // connect a second time                                                                                           //
+  this._lastLoginTokenWhenPolled = null;                                                                             // 63
+};                                                                                                                   // 64
+                                                                                                                     //
+// This is private, but it is exported for now because it is used by a                                               //
+// test in accounts-password.                                                                                        //
+//                                                                                                                   //
+Ap._storedLoginToken = function () {                                                                                 // 69
+  return Meteor._localStorage.getItem(this.LOGIN_TOKEN_KEY);                                                         // 70
+};                                                                                                                   // 71
+                                                                                                                     //
+Ap._storedLoginTokenExpires = function () {                                                                          // 73
+  return Meteor._localStorage.getItem(this.LOGIN_TOKEN_EXPIRES_KEY);                                                 // 74
+};                                                                                                                   // 75
+                                                                                                                     //
+Ap._storedUserId = function () {                                                                                     // 77
+  return Meteor._localStorage.getItem(this.USER_ID_KEY);                                                             // 78
+};                                                                                                                   // 79
+                                                                                                                     //
+Ap._unstoreLoginTokenIfExpiresSoon = function () {                                                                   // 81
+  var tokenExpires = this._storedLoginTokenExpires();                                                                // 82
+  if (tokenExpires && this._tokenExpiresSoon(new Date(tokenExpires))) {                                              // 83
+    this._unstoreLoginToken();                                                                                       // 84
+  }                                                                                                                  // 85
+};                                                                                                                   // 86
+                                                                                                                     //
+///                                                                                                                  //
+/// AUTO-LOGIN                                                                                                       //
+///                                                                                                                  //
+                                                                                                                     //
+Ap._initLocalStorage = function () {                                                                                 // 92
+  var self = this;                                                                                                   // 93
+                                                                                                                     //
+  // Key names to use in localStorage                                                                                //
+  self.LOGIN_TOKEN_KEY = "Meteor.loginToken";                                                                        // 96
+  self.LOGIN_TOKEN_EXPIRES_KEY = "Meteor.loginTokenExpires";                                                         // 97
+  self.USER_ID_KEY = "Meteor.userId";                                                                                // 98
+                                                                                                                     //
+  var rootUrlPathPrefix = __meteor_runtime_config__.ROOT_URL_PATH_PREFIX;                                            // 100
+  if (rootUrlPathPrefix || this.connection !== Meteor.connection) {                                                  // 101
+    // We want to keep using the same keys for existing apps that do not                                             //
+    // set a custom ROOT_URL_PATH_PREFIX, so that most users will not have                                           //
+    // to log in again after an app updates to a version of Meteor that                                              //
+    // contains this code, but it's generally preferable to namespace the                                            //
+    // keys so that connections from distinct apps to distinct DDP URLs                                              //
+    // will be distinct in Meteor._localStorage.                                                                     //
+    var namespace = ":" + this.connection._stream.rawUrl;                                                            // 108
+    if (rootUrlPathPrefix) {                                                                                         // 109
+      namespace += ":" + rootUrlPathPrefix;                                                                          // 110
+    }                                                                                                                // 111
+    self.LOGIN_TOKEN_KEY += namespace;                                                                               // 112
+    self.LOGIN_TOKEN_EXPIRES_KEY += namespace;                                                                       // 113
+    self.USER_ID_KEY += namespace;                                                                                   // 114
+  }                                                                                                                  // 115
+                                                                                                                     //
+  if (self._autoLoginEnabled) {                                                                                      // 117
+    // Immediately try to log in via local storage, so that any DDP                                                  //
+    // messages are sent after we have established our user account                                                  //
+    self._unstoreLoginTokenIfExpiresSoon();                                                                          // 120
+    var token = self._storedLoginToken();                                                                            // 121
+    if (token) {                                                                                                     // 122
+      // On startup, optimistically present us as logged in while the                                                //
+      // request is in flight. This reduces page flicker on startup.                                                 //
+      var userId = self._storedUserId();                                                                             // 125
+      userId && self.connection.setUserId(userId);                                                                   // 126
+      self.loginWithToken(token, function (err) {                                                                    // 127
+        if (err) {                                                                                                   // 128
+          Meteor._debug("Error logging in with token: " + err);                                                      // 129
+          self.makeClientLoggedOut();                                                                                // 130
+        }                                                                                                            // 131
+                                                                                                                     //
+        self._pageLoadLogin({                                                                                        // 133
+          type: "resume",                                                                                            // 134
+          allowed: !err,                                                                                             // 135
+          error: err,                                                                                                // 136
+          methodName: "login",                                                                                       // 137
+          // XXX This is duplicate code with loginWithToken, but                                                     //
+          // loginWithToken can also be called at other times besides                                                //
+          // page load.                                                                                              //
+          methodArguments: [{ resume: token }]                                                                       // 141
+        });                                                                                                          // 133
+      });                                                                                                            // 143
+    }                                                                                                                // 144
+  }                                                                                                                  // 145
+                                                                                                                     //
+  // Poll local storage every 3 seconds to login if someone logged in in                                             //
+  // another tab                                                                                                     //
+  self._lastLoginTokenWhenPolled = token;                                                                            // 149
+                                                                                                                     //
+  if (self._pollIntervalTimer) {                                                                                     // 151
+    // Unlikely that _initLocalStorage will be called more than once for                                             //
+    // the same AccountsClient instance, but just in case...                                                         //
+    clearInterval(self._pollIntervalTimer);                                                                          // 154
+  }                                                                                                                  // 155
+                                                                                                                     //
+  self._pollIntervalTimer = setInterval(function () {                                                                // 157
+    self._pollStoredLoginToken();                                                                                    // 158
+  }, 3000);                                                                                                          // 159
+};                                                                                                                   // 160
+                                                                                                                     //
+Ap._pollStoredLoginToken = function () {                                                                             // 162
+  var self = this;                                                                                                   // 163
+                                                                                                                     //
+  if (!self._autoLoginEnabled) {                                                                                     // 165
+    return;                                                                                                          // 166
+  }                                                                                                                  // 167
+                                                                                                                     //
+  var currentLoginToken = self._storedLoginToken();                                                                  // 169
+                                                                                                                     //
+  // != instead of !== just to make sure undefined and null are treated the same                                     //
+  if (self._lastLoginTokenWhenPolled != currentLoginToken) {                                                         // 172
+    if (currentLoginToken) {                                                                                         // 173
+      self.loginWithToken(currentLoginToken, function (err) {                                                        // 174
+        if (err) {                                                                                                   // 175
+          self.makeClientLoggedOut();                                                                                // 176
+        }                                                                                                            // 177
+      });                                                                                                            // 178
+    } else {                                                                                                         // 179
+      self.logout();                                                                                                 // 180
+    }                                                                                                                // 181
+  }                                                                                                                  // 182
+                                                                                                                     //
+  self._lastLoginTokenWhenPolled = currentLoginToken;                                                                // 184
+};                                                                                                                   // 185
+///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+
+}],"url_client.js":["./accounts_client.js",function(require,exports){
+
+///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+//                                                                                                                   //
+// packages/accounts-base/url_client.js                                                                              //
+//                                                                                                                   //
+///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+                                                                                                                     //
+exports.__esModule = true;                                                                                           //
+exports.AccountsTest = undefined;                                                                                    //
+                                                                                                                     //
+var _accounts_client = require("./accounts_client.js");                                                              // 1
+                                                                                                                     //
+var Ap = _accounts_client.AccountsClient.prototype;                                                                  // 3
+                                                                                                                     //
+// All of the special hash URLs we support for accounts interactions                                                 //
+var accountsPaths = ["reset-password", "verify-email", "enroll-account"];                                            // 6
+                                                                                                                     //
+var savedHash = window.location.hash;                                                                                // 8
+                                                                                                                     //
+Ap._initUrlMatching = function () {                                                                                  // 10
+  // By default, allow the autologin process to happen.                                                              //
+  this._autoLoginEnabled = true;                                                                                     // 12
+                                                                                                                     //
+  // We only support one callback per URL.                                                                           //
+  this._accountsCallbacks = {};                                                                                      // 15
+                                                                                                                     //
+  // Try to match the saved value of window.location.hash.                                                           //
+  this._attemptToMatchHash();                                                                                        // 18
+};                                                                                                                   // 19
+                                                                                                                     //
+// Separate out this functionality for testing                                                                       //
+                                                                                                                     //
+Ap._attemptToMatchHash = function () {                                                                               // 23
+  _attemptToMatchHash(this, savedHash, defaultSuccessHandler);                                                       // 24
+};                                                                                                                   // 25
+                                                                                                                     //
+// Note that both arguments are optional and are currently only passed by                                            //
+// accounts_url_tests.js.                                                                                            //
+function _attemptToMatchHash(accounts, hash, success) {                                                              // 29
+  _.each(accountsPaths, function (urlPart) {                                                                         // 30
+    var token;                                                                                                       // 31
+                                                                                                                     //
+    var tokenRegex = new RegExp("^\\#\\/" + urlPart + "\\/(.*)$");                                                   // 33
+    var match = hash.match(tokenRegex);                                                                              // 34
+                                                                                                                     //
+    if (match) {                                                                                                     // 36
+      token = match[1];                                                                                              // 37
+                                                                                                                     //
+      // XXX COMPAT WITH 0.9.3                                                                                       //
+      if (urlPart === "reset-password") {                                                                            // 40
+        accounts._resetPasswordToken = token;                                                                        // 41
+      } else if (urlPart === "verify-email") {                                                                       // 42
+        accounts._verifyEmailToken = token;                                                                          // 43
+      } else if (urlPart === "enroll-account") {                                                                     // 44
+        accounts._enrollAccountToken = token;                                                                        // 45
+      }                                                                                                              // 46
+    } else {                                                                                                         // 47
+      return;                                                                                                        // 48
+    }                                                                                                                // 49
+                                                                                                                     //
+    // If no handlers match the hash, then maybe it's meant to be consumed                                           //
+    // by some entirely different code, so we only clear it the first time                                           //
+    // a handler successfully matches. Note that later handlers reuse the                                            //
+    // savedHash, so clearing window.location.hash here will not interfere                                           //
+    // with their needs.                                                                                             //
+    window.location.hash = "";                                                                                       // 56
+                                                                                                                     //
+    // Do some stuff with the token we matched                                                                       //
+    success.call(accounts, token, urlPart);                                                                          // 59
+  });                                                                                                                // 60
+}                                                                                                                    // 61
+                                                                                                                     //
+function defaultSuccessHandler(token, urlPart) {                                                                     // 63
+  var self = this;                                                                                                   // 64
+                                                                                                                     //
+  // put login in a suspended state to wait for the interaction to finish                                            //
+  self._autoLoginEnabled = false;                                                                                    // 67
+                                                                                                                     //
+  // wait for other packages to register callbacks                                                                   //
+  Meteor.startup(function () {                                                                                       // 70
+    // if a callback has been registered for this kind of token, call it                                             //
+    if (self._accountsCallbacks[urlPart]) {                                                                          // 72
+      self._accountsCallbacks[urlPart](token, function () {                                                          // 73
+        self._enableAutoLogin();                                                                                     // 74
+      });                                                                                                            // 75
+    }                                                                                                                // 76
+  });                                                                                                                // 77
+}                                                                                                                    // 78
+                                                                                                                     //
+// Export for testing                                                                                                //
+var AccountsTest = exports.AccountsTest = {                                                                          // 81
+  attemptToMatchHash: function () {                                                                                  // 82
+    function attemptToMatchHash(hash, success) {                                                                     // 82
+      return _attemptToMatchHash(Accounts, hash, success);                                                           // 83
+    }                                                                                                                // 84
+                                                                                                                     //
+    return attemptToMatchHash;                                                                                       // 82
+  }()                                                                                                                // 82
+};                                                                                                                   // 81
+                                                                                                                     //
+// XXX these should be moved to accounts-password eventually. Right now                                              //
+// this is prevented by the need to set autoLoginEnabled=false, but in                                               //
+// some bright future we won't need to do that anymore.                                                              //
+                                                                                                                     //
+/**                                                                                                                  //
+ * @summary Register a function to call when a reset password link is clicked                                        //
+ * in an email sent by                                                                                               //
+ * [`Accounts.sendResetPasswordEmail`](#accounts_sendresetpasswordemail).                                            //
+ * This function should be called in top-level code, not inside                                                      //
+ * `Meteor.startup()`.                                                                                               //
+ * @memberof! Accounts                                                                                               //
+ * @name onResetPasswordLink                                                                                         //
+ * @param  {Function} callback The function to call. It is given two arguments:                                      //
+ *                                                                                                                   //
+ * 1. `token`: A password reset token that can be passed to                                                          //
+ * [`Accounts.resetPassword`](#accounts_resetpassword).                                                              //
+ * 2. `done`: A function to call when the password reset UI flow is complete. The normal                             //
+ * login process is suspended until this function is called, so that the                                             //
+ * password for user A can be reset even if user B was logged in.                                                    //
+ * @locus Client                                                                                                     //
+ */                                                                                                                  //
+Ap.onResetPasswordLink = function (callback) {                                                                       // 108
+  if (this._accountsCallbacks["reset-password"]) {                                                                   // 109
+    Meteor._debug("Accounts.onResetPasswordLink was called more than once. " + "Only one callback added will be executed.");
+  }                                                                                                                  // 112
+                                                                                                                     //
+  this._accountsCallbacks["reset-password"] = callback;                                                              // 114
+};                                                                                                                   // 115
+                                                                                                                     //
+/**                                                                                                                  //
+ * @summary Register a function to call when an email verification link is                                           //
+ * clicked in an email sent by                                                                                       //
+ * [`Accounts.sendVerificationEmail`](#accounts_sendverificationemail).                                              //
+ * This function should be called in top-level code, not inside                                                      //
+ * `Meteor.startup()`.                                                                                               //
+ * @memberof! Accounts                                                                                               //
+ * @name onEmailVerificationLink                                                                                     //
+ * @param  {Function} callback The function to call. It is given two arguments:                                      //
+ *                                                                                                                   //
+ * 1. `token`: An email verification token that can be passed to                                                     //
+ * [`Accounts.verifyEmail`](#accounts_verifyemail).                                                                  //
+ * 2. `done`: A function to call when the email verification UI flow is complete.                                    //
+ * The normal login process is suspended until this function is called, so                                           //
+ * that the user can be notified that they are verifying their email before                                          //
+ * being logged in.                                                                                                  //
+ * @locus Client                                                                                                     //
+ */                                                                                                                  //
+Ap.onEmailVerificationLink = function (callback) {                                                                   // 135
+  if (this._accountsCallbacks["verify-email"]) {                                                                     // 136
+    Meteor._debug("Accounts.onEmailVerificationLink was called more than once. " + "Only one callback added will be executed.");
+  }                                                                                                                  // 139
+                                                                                                                     //
+  this._accountsCallbacks["verify-email"] = callback;                                                                // 141
+};                                                                                                                   // 142
+                                                                                                                     //
+/**                                                                                                                  //
+ * @summary Register a function to call when an account enrollment link is                                           //
+ * clicked in an email sent by                                                                                       //
+ * [`Accounts.sendEnrollmentEmail`](#accounts_sendenrollmentemail).                                                  //
+ * This function should be called in top-level code, not inside                                                      //
+ * `Meteor.startup()`.                                                                                               //
+ * @memberof! Accounts                                                                                               //
+ * @name onEnrollmentLink                                                                                            //
+ * @param  {Function} callback The function to call. It is given two arguments:                                      //
+ *                                                                                                                   //
+ * 1. `token`: A password reset token that can be passed to                                                          //
+ * [`Accounts.resetPassword`](#accounts_resetpassword) to give the newly                                             //
+ * enrolled account a password.                                                                                      //
+ * 2. `done`: A function to call when the enrollment UI flow is complete.                                            //
+ * The normal login process is suspended until this function is called, so that                                      //
+ * user A can be enrolled even if user B was logged in.                                                              //
+ * @locus Client                                                                                                     //
+ */                                                                                                                  //
+Ap.onEnrollmentLink = function (callback) {                                                                          // 162
+  if (this._accountsCallbacks["enroll-account"]) {                                                                   // 163
+    Meteor._debug("Accounts.onEnrollmentLink was called more than once. " + "Only one callback added will be executed.");
+  }                                                                                                                  // 166
+                                                                                                                     //
+  this._accountsCallbacks["enroll-account"] = callback;                                                              // 168
+};                                                                                                                   // 169
+///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+
+}]}}}},{"extensions":[".js",".json"]});
+var exports = require("./node_modules/meteor/accounts-base/client_main.js");
+
+/* Exports */
+if (typeof Package === 'undefined') Package = {};
+(function (pkg, symbols) {
+  for (var s in symbols)
+    (s in pkg) || (pkg[s] = symbols[s]);
+})(Package['accounts-base'] = exports, {
+  Accounts: Accounts
+});
+
+})();
+//////////////////////////////////////////////////////////////////////////
+//                                                                      //
+// This is a generated file. You can view the original                  //
+// source in your browser if your browser supports source maps.         //
+// Source maps are supported by all recent versions of Chrome, Safari,  //
+// and Firefox, and by Internet Explorer 11.                            //
+//                                                                      //
+//////////////////////////////////////////////////////////////////////////
+
+
+(function () {
+
+/* Imports */
+var Meteor = Package.meteor.Meteor;
+var global = Package.meteor.global;
+var meteorEnv = Package.meteor.meteorEnv;
+var Accounts = Package['accounts-base'].Accounts;
+var Mongo = Package.mongo.Mongo;
+
+/* Package-scope variables */
+var ServiceConfiguration;
+
+(function(){
+
+////////////////////////////////////////////////////////////////////////////////////////
+//                                                                                    //
+// packages/service-configuration/service_configuration_common.js                     //
+//                                                                                    //
+////////////////////////////////////////////////////////////////////////////////////////
+                                                                                      //
+if (typeof ServiceConfiguration === 'undefined') {                                    // 1
+  ServiceConfiguration = {};                                                          // 2
+}                                                                                     // 3
+                                                                                      // 4
+                                                                                      // 5
+// Table containing documents with configuration options for each                     // 6
+// login service                                                                      // 7
+ServiceConfiguration.configurations = new Mongo.Collection(                           // 8
+  "meteor_accounts_loginServiceConfiguration", {                                      // 9
+    _preventAutopublish: true,                                                        // 10
+    connection: Meteor.isClient ? Accounts.connection : Meteor.connection             // 11
+  });                                                                                 // 12
+// Leave this collection open in insecure mode. In theory, someone could              // 13
+// hijack your oauth connect requests to a different endpoint or appId,               // 14
+// but you did ask for 'insecure'. The advantage is that it is much                   // 15
+// easier to write a configuration wizard that works only in insecure                 // 16
+// mode.                                                                              // 17
+                                                                                      // 18
+                                                                                      // 19
+// Thrown when trying to use a login service which is not configured                  // 20
+ServiceConfiguration.ConfigError = function (serviceName) {                           // 21
+  if (Meteor.isClient && !Accounts.loginServicesConfigured()) {                       // 22
+    this.message = "Login service configuration not yet loaded";                      // 23
+  } else if (serviceName) {                                                           // 24
+    this.message = "Service " + serviceName + " not configured";                      // 25
+  } else {                                                                            // 26
+    this.message = "Service not configured";                                          // 27
+  }                                                                                   // 28
+};                                                                                    // 29
+ServiceConfiguration.ConfigError.prototype = new Error();                             // 30
+ServiceConfiguration.ConfigError.prototype.name = 'ServiceConfiguration.ConfigError';
+                                                                                      // 32
+////////////////////////////////////////////////////////////////////////////////////////
+
+}).call(this);
+
+
+/* Exports */
+if (typeof Package === 'undefined') Package = {};
+(function (pkg, symbols) {
+  for (var s in symbols)
+    (s in pkg) || (pkg[s] = symbols[s]);
+})(Package['service-configuration'] = {}, {
+  ServiceConfiguration: ServiceConfiguration
+});
+
+})();
 /* Imports for global scope */
 
 Meteor = Package.meteor.Meteor;
@@ -23223,4 +24869,5 @@ DDP = Package['ddp-client'].DDP;
 Mongo = Package.mongo.Mongo;
 Tracker = Package.tracker.Tracker;
 Deps = Package.tracker.Deps;
+Accounts = Package['accounts-base'].Accounts;
 

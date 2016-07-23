@@ -47,11 +47,11 @@ cat "$PACKAGES_PATH/babel-runtime.js" >> $OUTPUT_PATH/$NAME.bundle.js
 cat "$PACKAGES_PATH/ecmascript-runtime.js" >> $OUTPUT_PATH/$NAME.bundle.js
 cat "$PACKAGES_PATH/ecmascript.js" >> $OUTPUT_PATH/$NAME.bundle.js
 cat "$PACKAGES_PATH/base64.js" >> $OUTPUT_PATH/$NAME.bundle.js
-cat "$PACKAGES_PATH/srp.js" >> $OUTPUT_PATH/$NAME.bundle.js
-cat "$PACKAGES_PATH/sha.js" >> $OUTPUT_PATH/$NAME.bundle.js
 cat "$PACKAGES_PATH/ejson.js" >> $OUTPUT_PATH/$NAME.bundle.js
 cat "$PACKAGES_PATH/check.js" >> $OUTPUT_PATH/$NAME.bundle.js
 cat "$PACKAGES_PATH/random.js" >> $OUTPUT_PATH/$NAME.bundle.js
+cat "$PACKAGES_PATH/sha.js" >> $OUTPUT_PATH/$NAME.bundle.js
+cat "$PACKAGES_PATH/srp.js" >> $OUTPUT_PATH/$NAME.bundle.js
 cat "$PACKAGES_PATH/tracker.js" >> $OUTPUT_PATH/$NAME.bundle.js
 cat "$PACKAGES_PATH/retry.js" >> $OUTPUT_PATH/$NAME.bundle.js
 cat "$PACKAGES_PATH/id-map.js" >> $OUTPUT_PATH/$NAME.bundle.js

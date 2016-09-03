@@ -69,8 +69,28 @@ cat "$PACKAGES_PATH/localstorage.js" >> $OUTPUT_PATH/$NAME.bundle.js
 cat "$PACKAGES_PATH/callback-hook.js" >> $OUTPUT_PATH/$NAME.bundle.js
 cat "$PACKAGES_PATH/accounts-base.js" >> $OUTPUT_PATH/$NAME.bundle.js
 cat "$PACKAGES_PATH/accounts-password.js" >> $OUTPUT_PATH/$NAME.bundle.js
-cat "$PACKAGES_PATH/service-configuration.js" >> $OUTPUT_PATH/$NAME.bundle.js
+cat "$PACKAGES_PATH/cfs_base-package.js" >> $OUTPUT_PATH/$NAME.bundle.js
+cat "$PACKAGES_PATH/raix_eventemitter.js" >> $OUTPUT_PATH/$NAME.bundle.js
+cat "$PACKAGES_PATH/cfs_storage-adapter.js" >> $OUTPUT_PATH/$NAME.bundle.js
+cat "$PACKAGES_PATH/cfs_standard-packages.js" >> $OUTPUT_PATH/$NAME.bundle.js
+cat "$PACKAGES_PATH/cfs_gridfs.js" >> $OUTPUT_PATH/$NAME.bundle.js
+cat "$PACKAGES_PATH/url.js" >> $OUTPUT_PATH/$NAME.bundle.js
+cat "$PACKAGES_PATH/http.js" >> $OUTPUT_PATH/$NAME.bundle.js
+cat "$PACKAGES_PATH/cfs_data-man.js" >> $OUTPUT_PATH/$NAME.bundle.js
+cat "$PACKAGES_PATH/cfs_file.js" >> $OUTPUT_PATH/$NAME.bundle.js
+cat "$PACKAGES_PATH/cfs_tempstore.js" >> $OUTPUT_PATH/$NAME.bundle.js
+cat "$PACKAGES_PATH/cfs_http-methods.js" >> $OUTPUT_PATH/$NAME.bundle.js
+cat "$PACKAGES_PATH/cfs_http-publish.js" >> $OUTPUT_PATH/$NAME.bundle.js
+cat "$PACKAGES_PATH/cfs_access-point.js" >> $OUTPUT_PATH/$NAME.bundle.js
+cat "$PACKAGES_PATH/cfs_reactive-property.js" >> $OUTPUT_PATH/$NAME.bundle.js
+cat "$PACKAGES_PATH/cfs_reactive-list.js" >> $OUTPUT_PATH/$NAME.bundle.js
+cat "$PACKAGES_PATH/cfs_power-queue.js" >> $OUTPUT_PATH/$NAME.bundle.js
+cat "$PACKAGES_PATH/cfs_collection.js" >> $OUTPUT_PATH/$NAME.bundle.js
+cat "$PACKAGES_PATH/cfs_upload-http.js" >> $OUTPUT_PATH/$NAME.bundle.js
+cat "$PACKAGES_PATH/cfs_collection-filters.js" >> $OUTPUT_PATH/$NAME.bundle.js
+cat "$PACKAGES_PATH/cfs_worker.js" >> $OUTPUT_PATH/$NAME.bundle.js
 cat "$PACKAGES_PATH/global-imports.js" >> $OUTPUT_PATH/$NAME.bundle.js
+cat "$PACKAGES_PATH/service-configuration.js" >> $OUTPUT_PATH/$NAME.bundle.js
 
 # Minify
 #npm install uglify-js

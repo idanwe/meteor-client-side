@@ -37,7 +37,7 @@ rm -rf $OUTPUT_PATH
 mkdir $OUTPUT_PATH
 
 # Concat files
-cat "$PACKAGES_PATH/$PACKAGES_PATH/underscore.js" >> $OUTPUT_PATH/$NAME.bundle.js
+cat "$PACKAGES_PATH/underscore.js" >> $OUTPUT_PATH/$NAME.bundle.js
 cat "$PACKAGES_PATH/meteor-runtime-config.js" >> $OUTPUT_PATH/$NAME.bundle.js
 cat "$PACKAGES_PATH/meteor.js" >> $OUTPUT_PATH/$NAME.bundle.js
 cat "$PACKAGES_PATH/tracker.js" >> $OUTPUT_PATH/$NAME.bundle.js

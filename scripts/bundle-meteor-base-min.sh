@@ -17,60 +17,14 @@ mkdir -p $DIST_PATH
 
 # Create temp meteor project
 rm -rf $BUNDLER_PATH
+#curl https://install.meteor.com | sh
 meteor create $BUNDLER_PATH
 
 # Move packages to meteor folder
 cp src/packages $BUNDLER_PATH/.meteor/
-
 cd $BUNDLER_PATH
 
 # Build the packages
-PACKAGE_DIRS=$PROJECT_PARENT meteor build --debug .
-tar -zxf $BUNDLER_TEMP.tar.gz
-
-OUTPUT_PATH="$DIST_PATH/$NAME-bundler-output"
-PACKAGES_PATH="$DIST_PATH/$BUNDLER_TEMP/bundle/programs/web.browser/packages"
-
-# Create output folder and copy the dependencies files
-rm -rf $OUTPUT_PATH
-mkdir $OUTPUT_PATH
-
-# Concat files
-cat "$PACKAGES_PATH/underscore.js" >> $OUTPUT_PATH/$NAME.bundle.js
-cat "$PROJECT_ROOT/meteor-runtime-config.js" >> $OUTPUT_PATH/$NAME.bundle.js
-cat "$PACKAGES_PATH/meteor.js" >> $OUTPUT_PATH/$NAME.bundle.js
-cat "$PACKAGES_PATH/modules-runtime.js" >> $OUTPUT_PATH/$NAME.bundle.js
-cat "$PACKAGES_PATH/modules.js" >> $OUTPUT_PATH/$NAME.bundle.js
-cat "$PACKAGES_PATH/promise.js" >> $OUTPUT_PATH/$NAME.bundle.js
-cat "$PACKAGES_PATH/babel-runtime.js" >> $OUTPUT_PATH/$NAME.bundle.js
-cat "$PACKAGES_PATH/ecmascript-runtime.js" >> $OUTPUT_PATH/$NAME.bundle.js
-cat "$PACKAGES_PATH/ecmascript.js" >> $OUTPUT_PATH/$NAME.bundle.js
-cat "$PACKAGES_PATH/base64.js" >> $OUTPUT_PATH/$NAME.bundle.js
-cat "$PACKAGES_PATH/ejson.js" >> $OUTPUT_PATH/$NAME.bundle.js
-cat "$PACKAGES_PATH/jquery.js" >> $OUTPUT_PATH/$NAME.bundle.js
-cat "$PACKAGES_PATH/check.js" >> $OUTPUT_PATH/$NAME.bundle.js
-cat "$PACKAGES_PATH/random.js" >> $OUTPUT_PATH/$NAME.bundle.js
-cat "$PACKAGES_PATH/tracker.js" >> $OUTPUT_PATH/$NAME.bundle.js
-cat "$PACKAGES_PATH/retry.js" >> $OUTPUT_PATH/$NAME.bundle.js
-cat "$PACKAGES_PATH/id-map.js" >> $OUTPUT_PATH/$NAME.bundle.js
-cat "$PACKAGES_PATH/ordered-dict.js" >> $OUTPUT_PATH/$NAME.bundle.js
-cat "$PACKAGES_PATH/geojson-utils.js" >> $OUTPUT_PATH/$NAME.bundle.js
-cat "$PACKAGES_PATH/diff-sequence.js" >> $OUTPUT_PATH/$NAME.bundle.js
-cat "$PACKAGES_PATH/mongo-id.js" >> $OUTPUT_PATH/$NAME.bundle.js
-cat "$PACKAGES_PATH/minimongo.js" >> $OUTPUT_PATH/$NAME.bundle.js
-cat "$PACKAGES_PATH/ddp-common.js" >> $OUTPUT_PATH/$NAME.bundle.js
-cat "$PACKAGES_PATH/ddp-client.js" >> $OUTPUT_PATH/$NAME.bundle.js
-cat "$PACKAGES_PATH/ddp.js" >> $OUTPUT_PATH/$NAME.bundle.js
-cat "$PACKAGES_PATH/allow-deny.js" >> $OUTPUT_PATH/$NAME.bundle.js
-cat "$PACKAGES_PATH/mongo.js" >> $OUTPUT_PATH/$NAME.bundle.js
-cat "$PACKAGES_PATH/global-imports.js" >> $OUTPUT_PATH/$NAME.bundle.js
-
-# Minify
-npm install uglify-js
-./node_modules/.bin/uglifyjs $OUTPUT_PATH/$NAME.bundle.js -o $OUTPUT_PATH/$NAME.bundle.min.js
-
-# Copy the bundled files to the dist folder
-cp $OUTPUT_PATH/$NAME.bundle.* $DIST_PATH
-
-# Cleanup
-rm -rf $BUNDLER_PATH $OUTPUT_PATH
+PACKAGE_DIRS=$PROJECT_PARENT
+meteor-build-client ./build
+#tar -zxf $BUNDLER_TEMP.tar.gz

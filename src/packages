@@ -3,3 +3,8 @@ underscore
 ddp
 mongo
 tracker
+accounts-base
+accounts-password
+cfs:filesystem
+cfs:standard-packages
+cfs:gridfs

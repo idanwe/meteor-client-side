@@ -1,4 +1,4 @@
-(function() { // inforce the context to be the window
+(function() { // enforce the context to be the window
 
 (function() {
   var _ = Package['underscore']._;

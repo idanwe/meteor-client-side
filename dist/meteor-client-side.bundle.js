@@ -1381,6 +1381,8 @@ if (typeof Package === 'undefined') Package = {};
 });
 
 })();
+(function() { // inforce the context to be the window
+
 (function() {
   var _ = Package['underscore']._;
   var config = this.__meteor_runtime_config__ || {};
@@ -1390,6 +1392,8 @@ if (typeof Package === 'undefined') Package = {};
     DDP_DEFAULT_CONNECTION_URL: 'http://localhost:3000'
   });
 }).call(this);
+
+})();
 //////////////////////////////////////////////////////////////////////////
 //                                                                      //
 // This is a generated file. You can view the original                  //
@@ -11626,7 +11630,7 @@ exports.GeoJSON = require("./geojson-utils.js");                                
   }                                                                                                        // 63
                                                                                                            // 64
   gju.pointInBoundingBox = function (point, bounds) {                                                      // 65
-    return !(point.coordinates[1] < bounds[0][0] || point.coordinates[1] > bounds[1][0] || point.coordinates[0] < bounds[0][1] || point.coordinates[0] > bounds[1][1]) 
+    return !(point.coordinates[1] < bounds[0][0] || point.coordinates[1] > bounds[1][0] || point.coordinates[0] < bounds[0][1] || point.coordinates[0] > bounds[1][1])
   }                                                                                                        // 67
                                                                                                            // 68
   // Point in Polygon                                                                                      // 69
@@ -16589,7 +16593,7 @@ DDPCommon.MethodInvocation = function (options) {                               
   // On the server, the connection this method call came in on.                                      // 51
                                                                                                      // 52
   /**                                                                                                // 53
-   * @summary Access inside a method invocation. The [connection](#meteor_onconnection) that this method was received on. `null` if the method is not associated with a connection, eg. a server initiated method call. Calls to methods made from a server method which was in turn initiated from the client share the same `connection`. 
+   * @summary Access inside a method invocation. The [connection](#meteor_onconnection) that this method was received on. `null` if the method is not associated with a connection, eg. a server initiated method call. Calls to methods made from a server method which was in turn initiated from the client share the same `connection`.
    * @locus Server                                                                                   // 55
    * @name  connection                                                                               // 56
    * @memberOf DDPCommon.MethodInvocation                                                            // 57

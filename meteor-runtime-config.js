@@ -1,3 +1,5 @@
+(function() { // inforce the context to be the window
+
 (function() {
   var _ = Package['underscore']._;
   var config = this.__meteor_runtime_config__ || {};
@@ -7,3 +9,5 @@
     DDP_DEFAULT_CONNECTION_URL: 'http://localhost:3000'
   });
 }).call(this);
+
+})();
